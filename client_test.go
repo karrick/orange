@@ -7,19 +7,23 @@ import (
 	"testing"
 )
 
-func withServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*Client)) {
+func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*httptest.Server)) {
 	server := httptest.NewServer(http.HandlerFunc(h))
 	defer server.Close()
+	callback(server)
+}
 
-	client, err := NewClient(&Config{
-		HTTPClient: server.Client(),
-		Servers:    []string{strings.TrimLeft(server.URL, "http://")},
+func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*Client)) {
+	withTestServer(tb, h, func(server *httptest.Server) {
+		client, err := NewClient(&Config{
+			HTTPClient: server.Client(),
+			Servers:    []string{strings.TrimLeft(server.URL, "http://")},
+		})
+		if err != nil {
+			tb.Fatal(err)
+		}
+		callback(client)
 	})
-	if err != nil {
-		tb.Fatal(err)
-	}
-
-	callback(client)
 }
 
 func TestClient(t *testing.T) {
@@ -29,7 +33,7 @@ func TestClient(t *testing.T) {
 				h := func(w http.ResponseWriter, r *http.Request) {
 					// does not write anything
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -43,7 +47,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -60,7 +64,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -75,7 +79,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -92,7 +96,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -107,7 +111,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withServer(t, h, func(client *Client) {
+				withClient(t, h, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -123,7 +127,7 @@ func TestClient(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("RangeException", "some error")
 			}
-			withServer(t, h, func(client *Client) {
+			withClient(t, h, func(client *Client) {
 				_, err := client.Query("foo")
 				switch err.(type) {
 				case ErrRangeException:
@@ -139,7 +143,7 @@ func TestClient(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(e)
 			}
-			withServer(t, h, func(client *Client) {
+			withClient(t, h, func(client *Client) {
 				_, err := client.Query("foo")
 				switch err.(type) {
 				case ErrStatusNotOK:
