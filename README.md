@@ -19,11 +19,15 @@ same.
 In any event, this library
 
 1. Guarantees HTTP connections can be re-used by always reading all
-   body bytes if the Get succeeded.
+   body bytes if the HTTP request succeeded.
 1. Detects and parses the RangeException header, returning any error
    message encoded therein.
-1. Returns a response as either raw slice of bytes or a slice of
-   strings.
+1. Returns response as either parsed slice of strings or an unparsed
+   slice of bytes or the HTTP response payload.
+1. Allows using either a client provided http.Client, or uses a
+   http.Client with default timeout settings.
+1. Optionally retries queries that fail when RetryCount is greater
+   than 0 and an optional RetryCallback function parameter.
 
 There are three possible error types this library returns:
 
@@ -58,20 +62,13 @@ func main() {
 	fmt.Printf("> ")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		response, err := client.Query(scanner.Text())
+		values, err := client.Query(scanner.Text())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 			fmt.Printf("> ")
 			continue
 		}
-
-		// The Query method returns a Response instance that can either return
-		// the raw byte slice from reading the range response, or a slice of
-		// strings, each string representing one of the results.  Using Split to
-		// return a slice of streings is the more common use case, but the Bytes
-		// method is provided for programs that want need the raw byte slice,
-		// such as a cache.
-		fmt.Printf("%v\n> ", response.Split())
+		fmt.Printf("%v\n> ", values)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)

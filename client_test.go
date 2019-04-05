@@ -30,11 +30,11 @@ func TestClient(t *testing.T) {
 					// does not write anything
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), nil)
+					ensureStringSlicesMatch(t, values, nil)
 				})
 			})
 			t.Run("with newline", func(t *testing.T) {
@@ -44,11 +44,11 @@ func TestClient(t *testing.T) {
 					}
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), nil)
+					ensureStringSlicesMatch(t, values, nil)
 				})
 			})
 		})
@@ -61,11 +61,11 @@ func TestClient(t *testing.T) {
 					}
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), []string{"result1"})
+					ensureStringSlicesMatch(t, values, []string{"result1"})
 				})
 			})
 
@@ -76,11 +76,11 @@ func TestClient(t *testing.T) {
 					}
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), []string{"result1"})
+					ensureStringSlicesMatch(t, values, []string{"result1"})
 				})
 			})
 		})
@@ -93,11 +93,11 @@ func TestClient(t *testing.T) {
 					}
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), []string{"result1", "result2"})
+					ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 				})
 			})
 
@@ -108,11 +108,11 @@ func TestClient(t *testing.T) {
 					}
 				}
 				withServer(t, h, func(client *Client) {
-					response, err := client.Query("foo")
+					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, response.Split(), []string{"result1", "result2"})
+					ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 				})
 			})
 		})

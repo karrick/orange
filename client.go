@@ -31,41 +31,34 @@ type Client struct {
 // range servers, but also allows specification of optional retry-on-failure
 // features.
 //
-//    func main() {
-//        // Create a range client.  Programs can list more than one server and
-//        // include other options.  See Config structure documentation for specifics.
-//        client, err := orange.NewClient(&orange.Config{
-//            Servers: []string{"localhost:8081"},
-//        })
-//        if err != nil {
-//            fmt.Fprintf(os.Stderr, "%s\n", err)
-//            os.Exit(1)
-//        }
+//     func main() {
+//         // Create a range client.  Programs can list more than one server and
+//         // include other options.  See Config structure documentation for specifics.
+//         client, err := orange.NewClient(&orange.Config{
+//             Servers: []string{"localhost:8081"},
+//         })
+//         if err != nil {
+//             fmt.Fprintf(os.Stderr, "%s\n", err)
+//             os.Exit(1)
+//         }
 //
-//        // Example program main loop reads query from standard input, queries the
-//        // range server, then prints the response.
-//        fmt.Printf("> ")
-//        scanner := bufio.NewScanner(os.Stdin)
-//        for scanner.Scan() {
-//            response, err := client.Query(scanner.Text())
-//            if err != nil {
-//                fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//                fmt.Printf("> ")
-//                continue
-//            }
-//
-//            // The Query method returns a Response instance that can either return
-//            // the raw byte slice from reading the range response, or a slice of
-//            // strings, each string representing one of the results.  Using Split to
-//            // return a slice of streings is the more common use case, but the Bytes
-//            // method is provided for programs that want need the raw byte slice,
-//            // such as a cache.
-//            fmt.Printf("%v\n> ", response.Split())
-//        }
-//        if err := scanner.Err(); err != nil {
-//            fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//        }
-//    }
+//         // Example program main loop reads query from standard input, queries the
+//         // range server, then prints the response.
+//         fmt.Printf("> ")
+//         scanner := bufio.NewScanner(os.Stdin)
+//         for scanner.Scan() {
+//             values, err := client.Query(scanner.Text())
+//             if err != nil {
+//                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//                 fmt.Printf("> ")
+//                 continue
+//             }
+//             fmt.Printf("%v\n> ", values)
+//         }
+//         if err := scanner.Err(); err != nil {
+//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//         }
+//     }
 func NewClient(config *Config) (*Client, error) {
 	if config.RetryCount < 0 {
 		return nil, fmt.Errorf("cannot create Querier with negative RetryCount: %d", config.RetryCount)
@@ -112,7 +105,8 @@ func NewClient(config *Config) (*Client, error) {
 	return client, nil
 }
 
-// Query sends out a query and returns a Response structure or an error.
+// Query sends out a query and returns either a slice of strings corresponding
+// to the query response or an error.
 //
 // The query is sent to one or more of the configured range servers.  If a
 // particular query results in an error, the query is retried according to the
@@ -122,15 +116,91 @@ func NewClient(config *Config) (*Client, error) {
 // If a query's response HTTP status code is not okay, it returns
 // ErrStatusNotOK.
 //
-//     response, err := client.Query("%someQuery")
-//     if err != nil {
-//         fmt.Fprintf(os.Stderr, "ERROR: %s", err)
-//         os.Exit(1)
+//     func main() {
+//         // Create a range client.  Programs can list more than one server and
+//         // include other options.  See Config structure documentation for specifics.
+//         client, err := orange.NewClient(&orange.Config{
+//             Servers: []string{"localhost:8081"},
+//         })
+//         if err != nil {
+//             fmt.Fprintf(os.Stderr, "%s\n", err)
+//             os.Exit(1)
+//         }
+//
+//         // Example program main loop reads query from standard input, queries the
+//         // range server, then prints the response.
+//         fmt.Printf("> ")
+//         scanner := bufio.NewScanner(os.Stdin)
+//         for scanner.Scan() {
+//             values, err := client.Query(scanner.Text())
+//             if err != nil {
+//                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//                 fmt.Printf("> ")
+//                 continue
+//             }
+//             fmt.Printf("%v\n> ", values)
+//         }
+//         if err := scanner.Err(); err != nil {
+//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//         }
 //     }
-//     for _, s := response.Split() {
-//         fmt.Println(s)
+func (c *Client) Query(expression string) ([]string, error) {
+	r, err := c.query(expression)
+	if err == nil {
+		return r.Split(), nil
+	}
+	return nil, err
+}
+
+// QueryBytes sends out a query and returns either a slice of bytes
+// corresponding to the HTTP response body received from the range server, or an
+// error.
+//
+// The query is sent to one or more of the configured range servers.  If a
+// particular query results in an error, the query is retried according to the
+// client's RetryCount setting.
+//
+// If a response includes a RangeException header, it returns ErrRangeException.
+// If a query's response HTTP status code is not okay, it returns
+// ErrStatusNotOK.
+//
+//     func main() {
+//         // Create a range client.  Programs can list more than one server and
+//         // include other options.  See Config structure documentation for specifics.
+//         client, err := orange.NewClient(&orange.Config{
+//             Servers: []string{"localhost:8081"},
+//         })
+//         if err != nil {
+//             fmt.Fprintf(os.Stderr, "%s\n", err)
+//             os.Exit(1)
+//         }
+//
+//         // Example program main loop reads query from standard input, queries the
+//         // range server, then prints the response.
+//         fmt.Printf("> ")
+//         scanner := bufio.NewScanner(os.Stdin)
+//         for scanner.Scan() {
+//             buf, err := client.QueryBytes(scanner.Text())
+//             if err != nil {
+//                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//                 fmt.Printf("> ")
+//                 continue
+//             }
+//             fmt.Println(string(buf))
+//         }
+//         if err := scanner.Err(); err != nil {
+//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//         }
 //     }
-func (c *Client) Query(expression string) (*Response, error) {
+func (c *Client) QueryBytes(expression string) ([]byte, error) {
+	r, err := c.query(expression)
+	if err == nil {
+		return r.Bytes(), nil
+	}
+	return nil, err
+}
+
+func (c *Client) query(expression string) (*response, error) {
 	// This function iterates through the round robin list of servers, sending
 	// query to each server, one after the other, until a non-error result is
 	// obtained.  It returns a byte slice from reading the HTTP response body,
@@ -153,7 +223,7 @@ func (c *Client) Query(expression string) (*Response, error) {
 // to send the query using both GET and PUT HTTP methods. It defaults to using
 // GET first, then trying PUT, unless the query length is longer than a program
 // constant, in which case it first tries PUT then will try GET.
-func (c *Client) getFromRangeServer(expression string) (*Response, error) {
+func (c *Client) getFromRangeServer(expression string) (*response, error) {
 	var err, herr error
 	var response *http.Response
 

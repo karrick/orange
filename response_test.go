@@ -7,27 +7,27 @@ import (
 
 func TestResponse(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
-		response := &Response{buf: nil}
-		ensureStringSlicesMatch(t, response.Split(), nil)
+		r := &response{buf: nil}
+		ensureStringSlicesMatch(t, r.Split(), nil)
 	})
 	t.Run("single", func(t *testing.T) {
-		response := &Response{buf: []byte("one")}
-		ensureStringSlicesMatch(t, response.Split(), []string{"one"})
+		r := &response{buf: []byte("one")}
+		ensureStringSlicesMatch(t, r.Split(), []string{"one"})
 	})
 	t.Run("double", func(t *testing.T) {
-		response := &Response{buf: []byte("one\ntwo")}
-		ensureStringSlicesMatch(t, response.Split(), []string{"one", "two"})
+		r := &response{buf: []byte("one\ntwo")}
+		ensureStringSlicesMatch(t, r.Split(), []string{"one", "two"})
 	})
 }
 
 func TestNewResponse(t *testing.T) {
 	run := func(tb testing.TB, input string, expected []string) {
 		tb.Helper()
-		response, err := newResponseFromReader(bytes.NewReader([]byte(input)))
+		r, err := newResponseFromReader(bytes.NewReader([]byte(input)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		ensureStringSlicesMatch(tb, response.Split(), expected)
+		ensureStringSlicesMatch(tb, r.Split(), expected)
 	}
 	t.Run("empty", func(t *testing.T) {
 		run(t, "", nil)

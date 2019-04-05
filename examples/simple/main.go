@@ -24,20 +24,13 @@ func main() {
 	fmt.Printf("> ")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		response, err := client.Query(scanner.Text())
+		values, err := client.Query(scanner.Text())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 			fmt.Printf("> ")
 			continue
 		}
-
-		// The Query method returns a Response instance that can either return
-		// the raw byte slice from reading the range response, or a slice of
-		// strings, each string representing one of the results.  Using Split to
-		// return a slice of streings is the more common use case, but the Bytes
-		// method is provided for programs that want need the raw byte slice,
-		// such as a cache.
-		fmt.Printf("%v\n> ", response.Split())
+		fmt.Printf("%v\n> ", values)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
