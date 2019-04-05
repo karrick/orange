@@ -15,11 +15,16 @@ type Response struct {
 // newResponseFromReader returns a Response structure after reading the provided
 // io.Reader, or an error if reading resulted in an error.  This initialization
 // function is provided because Response will not properly work if the final
-// byte read is not a newline.
+// byte read is not a newline.  It is necessary to standardize final newline
+// because some range server implementations return a final newline and some do
+// not.
 func newResponseFromReader(r io.Reader) (*Response, error) {
-	buf, err := ioutil.ReadAll(&LineTerminatedReader{R: r})
+	buf, err := ioutil.ReadAll(r)
 	if err != nil {
 		return nil, err
+	}
+	if l := len(buf); l == 0 || buf[l-1] != '\n' {
+		buf = append(buf, '\n')
 	}
 	return &Response{buf: buf}, nil
 }

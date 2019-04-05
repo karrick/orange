@@ -25,45 +25,95 @@ func withServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), c
 func TestClient(t *testing.T) {
 	t.Run("normal", func(t *testing.T) {
 		t.Run("empty", func(t *testing.T) {
-			h := func(w http.ResponseWriter, r *http.Request) {
-				// does not write anything
-			}
-			withServer(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				if err != nil {
-					t.Fatal(err)
+			t.Run("sans newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					// does not write anything
 				}
-				ensureStringSlicesMatch(t, response.Split(), nil)
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), nil)
+				})
+			})
+			t.Run("with newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					if _, err := w.Write([]byte{'\n'}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), nil)
+				})
 			})
 		})
 
 		t.Run("single", func(t *testing.T) {
-			h := func(w http.ResponseWriter, r *http.Request) {
-				if _, err := w.Write([]byte("result1")); err != nil {
-					t.Fatal(err)
+			t.Run("sans newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					if _, err := w.Write([]byte("result1")); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			withServer(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				if err != nil {
-					t.Fatal(err)
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), []string{"result1"})
+				})
+			})
+
+			t.Run("with newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					if _, err := w.Write([]byte("result1\n")); err != nil {
+						t.Fatal(err)
+					}
 				}
-				ensureStringSlicesMatch(t, response.Split(), []string{"result1"})
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), []string{"result1"})
+				})
 			})
 		})
 
 		t.Run("double", func(t *testing.T) {
-			h := func(w http.ResponseWriter, r *http.Request) {
-				if _, err := w.Write([]byte("result1\nresult2")); err != nil {
-					t.Fatal(err)
+			t.Run("sans newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					if _, err := w.Write([]byte("result1\nresult2")); err != nil {
+						t.Fatal(err)
+					}
 				}
-			}
-			withServer(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				if err != nil {
-					t.Fatal(err)
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), []string{"result1", "result2"})
+				})
+			})
+
+			t.Run("with newline", func(t *testing.T) {
+				h := func(w http.ResponseWriter, r *http.Request) {
+					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
+						t.Fatal(err)
+					}
 				}
-				ensureStringSlicesMatch(t, response.Split(), []string{"result1", "result2"})
+				withServer(t, h, func(client *Client) {
+					response, err := client.Query("foo")
+					if err != nil {
+						t.Fatal(err)
+					}
+					ensureStringSlicesMatch(t, response.Split(), []string{"result1", "result2"})
+				})
 			})
 		})
 	})
