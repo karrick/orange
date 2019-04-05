@@ -1,14 +1,11 @@
 package orange
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -17,7 +14,7 @@ import (
 // sent out via a PUT query.
 const defaultQueryLengthThreshold = 4096
 
-// Client attempts to resolve range queries to a list of strings or an error.
+// Client provides a Query method that resolves range queries.
 type Client struct {
 	// The only thing that prevents us from exposing a structure with all public
 	// fields is the fact that we need to create the round robin list of
@@ -34,21 +31,41 @@ type Client struct {
 // range servers, but also allows specification of optional retry-on-failure
 // features.
 //
-//	func main() {
-//		servers := []string{"range1.example.com", "range2.example.com", "range3.example.com"}
+//    func main() {
+//        // Create a range client.  Programs can list more than one server and
+//        // include other options.  See Config structure documentation for specifics.
+//        client, err := orange.NewClient(&orange.Config{
+//            Servers: []string{"localhost:8081"},
+//        })
+//        if err != nil {
+//            fmt.Fprintf(os.Stderr, "%s\n", err)
+//            os.Exit(1)
+//        }
 //
-//		config := &orange.Config{
-//			RetryCount:              len(servers),
-//			RetryPause:              5 * time.Second,
-//			Servers:                 servers,
-//		}
+//        // Example program main loop reads query from standard input, queries the
+//        // range server, then prints the response.
+//        fmt.Printf("> ")
+//        scanner := bufio.NewScanner(os.Stdin)
+//        for scanner.Scan() {
+//            response, err := client.Query(scanner.Text())
+//            if err != nil {
+//                fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//                fmt.Printf("> ")
+//                continue
+//            }
 //
-//		client, err := orange.NewQuerier(config)
-//		if err != nil {
-//			fmt.Fprintf(os.Stderr, "%s", err)
-//			os.Exit(1)
-//		}
-//	}
+//            // The Query method returns a Response instance that can either return
+//            // the raw byte slice from reading the range response, or a slice of
+//            // strings, each string representing one of the results.  Using Split to
+//            // return a slice of streings is the more common use case, but the Bytes
+//            // method is provided for programs that want need the raw byte slice,
+//            // such as a cache.
+//            fmt.Printf("%v\n> ", response.Split())
+//        }
+//        if err := scanner.Err(); err != nil {
+//            fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//        }
+//    }
 func NewClient(config *Config) (*Client, error) {
 	if config.RetryCount < 0 {
 		return nil, fmt.Errorf("cannot create Querier with negative RetryCount: %d", config.RetryCount)
@@ -95,58 +112,7 @@ func NewClient(config *Config) (*Client, error) {
 	return client, nil
 }
 
-// Queries sends each query expression out in parallel and returns the set union
-// of the responses from each query.
-//
-//     expressions := []string{"%query1", "%query2"}
-//
-//     lines, err := client.Queries(expressions)
-//     if err != nil {
-//         fmt.Fprintf(os.Stderr, "ERROR: %s", err)
-//         os.Exit(1)
-//     }
-//     for _, line := range lines {
-//         fmt.Println(line)
-//     }
-func (c *Client) Queries(expressions []string) ([]string, error) {
-	results := make(map[string]struct{})
-	var resultsErr error
-	var resultsLock sync.Mutex
-
-	var wg sync.WaitGroup
-	wg.Add(len(expressions))
-
-	for _, expression := range expressions {
-		go func(e string) {
-			defer wg.Done()
-			lines, err := c.Query(e)
-			resultsLock.Lock()
-			if err != nil {
-				resultsErr = err
-			} else {
-				for _, line := range lines {
-					results[line] = struct{}{}
-				}
-			}
-			resultsLock.Unlock()
-		}(expression)
-	}
-
-	wg.Wait()
-
-	if resultsErr != nil {
-		return nil, resultsErr
-	}
-
-	values := make([]string, 0, len(results)) // NOTE: len 0 for append
-	for v := range results {
-		values = append(values, v)
-	}
-
-	return values, nil
-}
-
-// Query sends out a single query and returns the results or an error.
+// Query sends out a query and returns a Response structure or an error.
 //
 // The query is sent to one or more of the configured range servers.  If a
 // particular query results in an error, the query is retried according to the
@@ -154,55 +120,26 @@ func (c *Client) Queries(expressions []string) ([]string, error) {
 //
 // If a response includes a RangeException header, it returns ErrRangeException.
 // If a query's response HTTP status code is not okay, it returns
-// ErrStatusNotOK.  Finally, if a query's HTTP response body cannot be parsed,
-// it returns ErrParseException.
+// ErrStatusNotOK.
 //
-//     lines, err := client.Query("%someQuery")
+//     response, err := client.Query("%someQuery")
 //     if err != nil {
 //         fmt.Fprintf(os.Stderr, "ERROR: %s", err)
 //         os.Exit(1)
 //     }
-//     for _, line := range lines {
-//         fmt.Println(line)
+//     for _, s := response.Split() {
+//         fmt.Println(s)
 //     }
-func (c *Client) Query(expression string) ([]string, error) {
-	iorc, err := c.getFromRangeServers(expression)
-	if err != nil {
-		return nil, err
-	}
-
-	// Split input text stream into lines.
-	var lines []string
-
-	scanner := bufio.NewScanner(iorc)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	err = scanner.Err()  // always check for scan error
-	cerr := iorc.Close() // always close the input stream
-
-	// The error returned from scanner has more context of the initial problem
-	// than error returned by Close.
-	if err != nil {
-		return nil, ErrParseException{Err: err}
-	}
-	if cerr != nil {
-		return nil, ErrParseException{Err: cerr}
-	}
-	return lines, nil
-}
-
-// getFromRangeServers iterates through the round robin list of servers, sending
-// query to each server, one after the other, until a non-error result is
-// obtained.  It returns an io.ReadCloser for reading the HTTP response body, or
-// an error when all the servers return an error for that query.
-func (c *Client) getFromRangeServers(expression string) (io.ReadCloser, error) {
+func (c *Client) Query(expression string) (*Response, error) {
+	// This function iterates through the round robin list of servers, sending
+	// query to each server, one after the other, until a non-error result is
+	// obtained.  It returns a byte slice from reading the HTTP response body,
+	// or an error when all the servers return an error for that query.
 	var attempts int
 	for {
-		iorc, err := c.getFromRangeServer(expression)
+		results, err := c.getFromRangeServer(expression)
 		if err == nil || attempts == c.retryCount || c.retryCallback(err) == false {
-			return iorc, err
+			return results, err
 		}
 		attempts++
 		if c.retryPause > 0 {
@@ -211,13 +148,12 @@ func (c *Client) getFromRangeServers(expression string) (io.ReadCloser, error) {
 	}
 }
 
-// getFromRangeServer sends to server the query and returns either a
-// io.ReadCloser for reading the valid server response, or an error. This
-// function attempts to send the query using both GET and PUT HTTP methods. It
-// defaults to using GET first, then trying PUT, unless the query length is
-// longer than a program constant, in which case it first tries PUT then will
-// try GET.
-func (c *Client) getFromRangeServer(expression string) (io.ReadCloser, error) {
+// getFromRangeServer sends to server the query and returns either a byte slice
+// from reading the valid server response, or an error. This function attempts
+// to send the query using both GET and PUT HTTP methods. It defaults to using
+// GET first, then trying PUT, unless the query length is longer than a program
+// constant, in which case it first tries PUT then will try GET.
+func (c *Client) getFromRangeServer(expression string) (*Response, error) {
 	var err, herr error
 	var response *http.Response
 
@@ -258,7 +194,18 @@ func (c *Client) getFromRangeServer(expression string) (io.ReadCloser, error) {
 			if message := response.Header.Get("RangeException"); message != "" {
 				return nil, ErrRangeException{Message: message}
 			}
-			return response.Body, nil // range server provided non-error response
+			//
+			// NORMAL EXIT PATH: range server provided non-error response
+			//
+			r, rerr := newResponseFromReader(response.Body)
+			cerr := response.Body.Close() // always close regardless of read error
+			if rerr != nil {
+				return nil, rerr // Read error has more context than Close error
+			}
+			if cerr != nil {
+				return nil, cerr
+			}
+			return r, nil
 		case http.StatusRequestURITooLong:
 			method = http.MethodPut // try again using PUT
 			herr = ErrStatusNotOK{

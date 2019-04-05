@@ -1,6 +1,6 @@
 # orange
 
-orange is a small Go library for interacting with range servers.
+orange is a Go library for interacting with range servers.
 
 ### Usage
 
@@ -22,20 +22,17 @@ In any event, this library
    body bytes if the Get succeeded.
 1. Detects and parses the RangeException header, returning any error
    message encoded therein.
-1. Converts response body to slice of strings.
+1. Returns a response as either raw slice of bytes or a slice of
+   strings.
 
-There are four possible error types this library returns:
+There are three possible error types this library returns:
 
-1. Raw error that the underlying Get method returned.
+1. Raw error that the HTTP GET method returned.
 1. ErrStatusNotOK is returned when the response status code is not OK.
 1. ErrRangeException is returned when the response headers includes
    'RangeException' header.
-1. ErrParseException is returned by Client.Query when an error occurs
-   while parsing the GET response.
 
 ### Example
-
-#### Create a Client
 
 Create a range client by specifying the desired configuration
 parameters, then use the client.  See the `orange.Config` data
@@ -43,20 +40,11 @@ structure and field members to use a provided `http.Client` instance
 or to customize the client's handling of retries.  The only required
 parameter is the Servers field.
 
+
 ```Go
-package main
-
-import (
-	"bufio"
-	"fmt"
-	"os"
-
-	"github.com/karrick/orange"
-)
-
 func main() {
-	// create a range querier; could list additional servers or include other
-	// options as well
+	// Create a range client.  Programs can list more than one server and
+	// include other options.  See Config structure documentation for specifics.
 	client, err := orange.NewClient(&orange.Config{
 		Servers: []string{"localhost:8081"},
 	})
@@ -65,71 +53,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	// main loop
+	// Example program main loop reads query from standard input, queries the
+	// range server, then prints the response.
 	fmt.Printf("> ")
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		expression := scanner.Text()
-		results, err := client.Query(expression)
+		response, err := client.Query(scanner.Text())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 			fmt.Printf("> ")
 			continue
 		}
-		fmt.Printf("%s\n> ", results)
+
+		// The Query method returns a Response instance that can either return
+		// the raw byte slice from reading the range response, or a slice of
+		// strings, each string representing one of the results.  Using Split to
+		// return a slice of streings is the more common use case, but the Bytes
+		// method is provided for programs that want need the raw byte slice,
+		// such as a cache.
+		fmt.Printf("%v\n> ", response.Split())
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 	}
-}
-```
-
-#### Sending Multiple Queries Simultaneously
-
-Kind of a contrived example, but if you have multiple queries to send
-and find the union of the results, you can do so in parallel by
-calling the `Queries` method.
-
-```Go
-package main
-
-import (
-	"bufio"
-	"fmt"
-	"os"
-
-	"github.com/karrick/orange"
-)
-
-func main() {
-	// create a range querier; could list additional servers or include other
-	// options as well
-	client, err := orange.NewClient(&orange.Config{
-		Servers: []string{"localhost:8081"},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", err)
-		os.Exit(1)
-	}
-
-	var expressions []string
-
-	// main loop
-	fmt.Printf("> ")
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		expressions = append(expressions, scanner.Text())
-		fmt.Printf("> ")
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-		os.Exit(1)
-	}
-	results, err := client.Queries(expressions)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(results)
 }
 ```

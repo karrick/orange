@@ -25,16 +25,6 @@ func (err ErrStatusNotOK) Error() string {
 	return err.Status
 }
 
-// ErrParseException is returned by Client.Query method when an error occurs
-// while reading the io.ReadCloser from the response.
-type ErrParseException struct {
-	Err error
-}
-
-func (err ErrParseException) Error() string {
-	return "cannot parse response: " + err.Err.Error()
-}
-
 ////////////////////////////////////////
 // Some utility functions for the default method of whether or not a query with
 // an error result ought to be retried.
