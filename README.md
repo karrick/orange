@@ -36,7 +36,7 @@ There are three possible error types this library returns:
 1. ErrRangeException is returned when the response headers includes
    'RangeException' header.
 
-### Example
+### Examples
 
 Create a range client by specifying the desired configuration
 parameters, then use the client.  See the `orange.Config` data
@@ -44,6 +44,10 @@ structure and field members to use a provided `http.Client` instance
 or to customize the client's handling of retries.  The only required
 parameter is the Servers field.
 
+#### Query
+
+Query returns a slice of strings corresponding to the range server
+response.
 
 ```Go
 func main() {
@@ -73,5 +77,42 @@ func main() {
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 	}
+}
+```
+
+#### QueryBytes
+
+QueryBytes returns the slice of bytes corresponding to the HTTP
+response body payload from the range server, in order to support use
+cases where a program needs to process or store raw responses.
+
+```Go
+func main() {
+    // Create a range client.  Programs can list more than one server and
+    // include other options.  See Config structure documentation for specifics.
+    client, err := orange.NewClient(&orange.Config{
+        Servers: []string{"localhost:8081"},
+    })
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "%s\n", err)
+        os.Exit(1)
+    }
+
+    // Example program main loop reads query from standard input, queries the
+    // range server, then prints the response.
+    fmt.Printf("> ")
+    scanner := bufio.NewScanner(os.Stdin)
+    for scanner.Scan() {
+        buf, err := client.QueryBytes(scanner.Text())
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+            fmt.Printf("> ")
+            continue
+        }
+        fmt.Println(string(buf))
+    }
+    if err := scanner.Err(); err != nil {
+        fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+    }
 }
 ```
