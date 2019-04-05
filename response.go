@@ -14,17 +14,16 @@ type Response struct {
 
 // newResponseFromReader returns a Response structure after reading the provided
 // io.Reader, or an error if reading resulted in an error.  This initialization
-// function is provided because Response will not properly work if the final
-// byte read is not a newline.  It is necessary to standardize final newline
-// because some range server implementations return a final newline and some do
-// not.
+// function is provided because some range server implementations return a final
+// newline and some do not.  This function normalizes those responses.
 func newResponseFromReader(r io.Reader) (*Response, error) {
 	buf, err := ioutil.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-	if l := len(buf); l == 0 || buf[l-1] != '\n' {
-		buf = append(buf, '\n')
+	// When final byte is newline, trim it.
+	if l := len(buf); l > 0 && buf[l-1] == '\n' {
+		buf = buf[:l-1]
 	}
 	return &Response{buf: buf}, nil
 }
@@ -35,12 +34,8 @@ func (r *Response) Bytes() []byte { return r.buf }
 // Split returns a slice of strings, each string representing one line from the
 // response.
 func (r *Response) Split() []string {
-	if len(r.buf) == 1 {
-		// Because we only create Response from buffers that end with newlines,
-		// when we have a single byte in the buffer, it must be the newline,
-		// which means we have no results.
-		return nil
+	if len(r.buf) > 0 {
+		return strings.Split(string(r.buf), "\n")
 	}
-	slice := strings.Split(string(r.buf), "\n")
-	return slice[:len(slice)-1] // remove the final empty element
+	return nil
 }
