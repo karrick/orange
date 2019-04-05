@@ -19,7 +19,7 @@ type Client struct {
 	// The only thing that prevents us from exposing a structure with all public
 	// fields is the fact that we need to create the round robin list of
 	// servers, and validate other config parameters.
-	httpClient    *http.Client
+	httpClient    Doer
 	servers       *roundRobinStrings
 	retryCallback func(error) bool
 	retryCount    int
@@ -246,7 +246,7 @@ func (c *Client) getFromRangeServer(expression string) (*response, error) {
 	for triesRemaining := 2; triesRemaining > 0; triesRemaining-- {
 		switch method {
 		case http.MethodGet:
-			response, err = c.httpClient.Get(uri)
+			response, err = c.getQuery(uri)
 		case http.MethodPut:
 			response, err = c.putQuery(endpoint, expression)
 		default:
@@ -297,6 +297,14 @@ func (c *Client) getFromRangeServer(expression string) (*response, error) {
 	}
 
 	return nil, herr
+}
+
+func (c *Client) getQuery(url string) (*http.Response, error) {
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.httpClient.Do(request)
 }
 
 func (c *Client) putQuery(endpoint, expression string) (*http.Response, error) {

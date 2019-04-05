@@ -27,7 +27,7 @@ type Config struct {
 	// HTTPClient allows the caller to specify a specially configured
 	// http.Client instance to use for all queries.  When none is provided, a
 	// client will be created using the default timeouts.
-	HTTPClient *http.Client
+	HTTPClient Doer
 
 	// RetryCallback is predicate function that tests whether query should be
 	// retried for a given error.  Leave nil to retry all errors.
@@ -43,4 +43,9 @@ type Config struct {
 	// Servers is slice of range server address strings.  Must contain at least
 	// one string.
 	Servers []string
+}
+
+// Doer performs the specfied http.Request and returns the http.Response.
+type Doer interface {
+	Do(*http.Request) (*http.Response, error)
 }
