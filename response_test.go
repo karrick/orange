@@ -1,7 +1,6 @@
 package orange
 
 import (
-	"bytes"
 	"testing"
 )
 
@@ -23,10 +22,7 @@ func TestResponse(t *testing.T) {
 func TestNewResponse(t *testing.T) {
 	run := func(tb testing.TB, input string, expected []string) {
 		tb.Helper()
-		r, err := newResponseFromReader(bytes.NewReader([]byte(input)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		r := newResponse([]byte(input))
 		ensureStringSlicesMatch(tb, r.Split(), expected)
 	}
 	t.Run("empty", func(t *testing.T) {
