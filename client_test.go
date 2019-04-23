@@ -4,10 +4,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func httpError(w http.ResponseWriter, code int) {
+	http.Error(w, strconv.Itoa(code)+" "+http.StatusText(code), code)
+}
 
 func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*httptest.Server)) {
 	server := httptest.NewServer(http.HandlerFunc(h))
@@ -170,15 +175,18 @@ func TestClient(t *testing.T) {
 		})
 	})
 
-	t.Run("Method retries", func(t *testing.T) {
-		t.Run("GET fails", func(t *testing.T) {
+	t.Run("retries query", func(t *testing.T) {
+		t.Run("with PUT when server returns uri too long", func(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodGet {
-					http.Error(w, "too long", http.StatusRequestURITooLong)
-					return
-				}
-				if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
-					t.Fatal(err)
+				switch r.Method {
+				case http.MethodGet:
+					httpError(w, http.StatusRequestURITooLong)
+				case http.MethodPut:
+					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
+						t.Fatal(err)
+					}
+				default:
+					httpError(w, http.StatusMethodNotAllowed)
 				}
 			}
 			withClient(t, h, func(client *Client) {
@@ -189,18 +197,25 @@ func TestClient(t *testing.T) {
 				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 			})
 		})
-		t.Run("PUT fails", func(t *testing.T) {
+		t.Run("with GET when server returns method not allowed", func(t *testing.T) {
+			var wasPutInvoked bool
+
 			h := func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPut {
-					http.Error(w, "not allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
-					t.Fatal(err)
+				switch r.Method {
+				case http.MethodGet:
+					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
+						t.Fatal(err)
+					}
+				case http.MethodPut:
+					wasPutInvoked = true
+					fallthrough
+				default:
+					httpError(w, http.StatusMethodNotAllowed)
 				}
 			}
+
 			withClient(t, h, func(client *Client) {
-				// Force use of PUT by creating very long query
+				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
 				for i := 0; i < defaultQueryLengthThreshold; i++ {
 					expression.WriteString(".")
@@ -212,6 +227,10 @@ func TestClient(t *testing.T) {
 				}
 				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 			})
+
+			if got, want := wasPutInvoked, true; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
 		})
 	})
 }
