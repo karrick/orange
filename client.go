@@ -269,6 +269,8 @@ func (c *Client) QueryBytesCtx(ctx context.Context, expression string) ([]byte, 
 	return nil, err
 }
 
+// query issues the specified range expression as a query using the provided
+// context, returning either a response structure or the resulting error.
 func (c *Client) query(ctx context.Context, expression string) (*response, error) {
 	type responseResult struct {
 		r *response
@@ -309,18 +311,21 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 }
 
 // getFromRangeServer sends to server the query and returns either a byte slice
-// from reading the valid server response, or an error. This function attempts
-// to send the query using both GET and PUT HTTP methods. It defaults to using
-// GET first, then trying PUT, unless the query length is longer than a program
-// constant, in which case it first tries PUT then will try GET.
+// from reading the valid server response, or an error.
+//
+// This function attempts to send the query using both GET and PUT HTTP methods.
+// It defaults to using GET first, then trying PUT, unless the query length is
+// longer than a program constant, in which case it first tries PUT then will
+// try GET.
 func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]byte, error) {
 	var err, herr error
 	var response *http.Response
 
-	// need endpoint for both GET and PUT, so keep it separate
+	// Need endpoint for both GET and PUT, so compute this value independently.
 	endpoint := fmt.Sprintf("http://%s/range/list", c.servers.Next())
 
-	// need uri for just GET
+	// While we only need uri for GET, we need to get its length to determine
+	// whether we should use GET or PUT.
 	uri := fmt.Sprintf("%s?%s", endpoint, url.QueryEscape(expression))
 
 	// Default to using GET request because most servers support it. However,
@@ -332,8 +337,9 @@ func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]b
 		method = http.MethodGet
 	}
 
-	// At least 2 tries so we can try GET or POST if server gives us 405 or 414.
-	for triesRemaining := 2; triesRemaining > 0; triesRemaining-- {
+	// At least 2 tries so we can try GET or PUT if server gives us 405 or 414.
+	for i := 0; i < 2; i++ {
+		// Bail early when reequest context has already been closed.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err() // terminate when client has canceled the context
@@ -347,8 +353,10 @@ func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]b
 		case http.MethodPut:
 			response, err = c.putQuery(ctx, endpoint, expression)
 		default:
+			// should not get here because we set method above
 			panic(fmt.Errorf("cannot use unsupported HTTP method: %q", method))
 		}
+
 		if err != nil {
 			// Could not make network request, or perhaps context closed by
 			// caller while waiting for response.
@@ -369,21 +377,12 @@ func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]b
 			return readAndClose(response.Body)
 		case http.StatusRequestURITooLong:
 			method = http.MethodPut // try again using PUT
-			herr = ErrStatusNotOK{
-				Status:     response.Status,
-				StatusCode: response.StatusCode,
-			}
 		case http.StatusMethodNotAllowed:
 			method = http.MethodGet // try again using GET
-			herr = ErrStatusNotOK{
-				Status:     response.Status,
-				StatusCode: response.StatusCode,
-			}
-		default:
-			herr = ErrStatusNotOK{
-				Status:     response.Status,
-				StatusCode: response.StatusCode,
-			}
+		}
+		herr = ErrStatusNotOK{
+			Status:     response.Status,
+			StatusCode: response.StatusCode,
 		}
 	}
 
@@ -408,6 +407,8 @@ func (c *Client) putQuery(ctx context.Context, endpoint, expression string) (*ht
 	return c.httpClient.Do(request.WithContext(ctx))
 }
 
+// readAndClose reads all bytes from rc then closes it.  It returns any errors
+// that occurred when either reading or closing rc.
 func readAndClose(rc io.ReadCloser) ([]byte, error) {
 	buf, rerr := ioutil.ReadAll(rc)
 	cerr := rc.Close() // always close regardless of read error

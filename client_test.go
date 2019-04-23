@@ -169,4 +169,49 @@ func TestClient(t *testing.T) {
 			})
 		})
 	})
+
+	t.Run("Method retries", func(t *testing.T) {
+		t.Run("GET fails", func(t *testing.T) {
+			h := func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					http.Error(w, "too long", http.StatusRequestURITooLong)
+					return
+				}
+				if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			withClient(t, h, func(client *Client) {
+				values, err := client.Query("foo")
+				if err != nil {
+					t.Fatal(err)
+				}
+				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
+			})
+		})
+		t.Run("PUT fails", func(t *testing.T) {
+			h := func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					http.Error(w, "not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			withClient(t, h, func(client *Client) {
+				// Force use of PUT by creating very long query
+				var expression strings.Builder
+				for i := 0; i < defaultQueryLengthThreshold; i++ {
+					expression.WriteString(".")
+				}
+
+				values, err := client.Query(expression.String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
+			})
+		})
+	})
 }
