@@ -326,12 +326,9 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 	var err, err2 error
 	var request *http.Request
 
-	// Need endpoint for both GET and PUT, so compute this value independently.
 	endpoint := fmt.Sprintf("http://%s/range/list", server)
-
-	// While we only need uri for GET, we need to get its length to determine
-	// whether we should use GET or PUT.
-	uri := fmt.Sprintf("%s?%s", endpoint, url.QueryEscape(expression))
+	escaped := url.QueryEscape(expression)
+	uri := fmt.Sprintf("%s?%s", endpoint, escaped)
 
 	// Default to using GET request because most servers support it. However,
 	// opt for PUT when extremely long query length.
@@ -363,9 +360,7 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 				continue
 			}
 		case http.MethodPut:
-			requestForm := url.Values{"query": []string{expression}}
-			requestBody := strings.NewReader(requestForm.Encode())
-			request, err = http.NewRequest(method, endpoint, requestBody)
+			request, err = http.NewRequest(method, endpoint, strings.NewReader("query="+escaped))
 			if err != nil {
 				if err2 == nil { // do not overwrite a previous error with this error
 					err2 = err
