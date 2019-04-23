@@ -284,7 +284,14 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 	go func() {
 		var attempts int
 		for {
-			buf, err := c.getFromRangeServer(ctx, expression)
+			// If not first attempt, and there is a retry pause, then wait.
+			// This logic will neither sleep on the first attempt nor after the
+			// final attempt.
+			if attempts > 0 && c.retryPause > 0 {
+				time.Sleep(c.retryPause)
+			}
+
+			buf, err := c.queryServer(ctx, expression, c.servers.Next())
 			if attempts == c.retryCount || err == nil || c.retryCallback(err) == false {
 				if err == nil {
 					ch <- responseResult{r: newResponse(buf)}
@@ -293,10 +300,8 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 				}
 				return
 			}
+
 			attempts++
-			if c.retryPause > 0 {
-				time.Sleep(c.retryPause)
-			}
 		}
 	}()
 
@@ -310,19 +315,19 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 	}
 }
 
-// getFromRangeServer sends to server the query and returns either a byte slice
-// from reading the valid server response, or an error.
+// queryServer sends to server the query and returns either a byte slice from
+// reading the valid server response, or an error.
 //
 // This function attempts to send the query using both GET and PUT HTTP methods.
 // It defaults to using GET first, then trying PUT, unless the query length is
 // longer than a program constant, in which case it first tries PUT then will
 // try GET.
-func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]byte, error) {
-	var err, herr error
-	var response *http.Response
+func (c *Client) queryServer(ctx context.Context, expression, server string) ([]byte, error) {
+	var err, err2 error
+	var request *http.Request
 
 	// Need endpoint for both GET and PUT, so compute this value independently.
-	endpoint := fmt.Sprintf("http://%s/range/list", c.servers.Next())
+	endpoint := fmt.Sprintf("http://%s/range/list", server)
 
 	// While we only need uri for GET, we need to get its length to determine
 	// whether we should use GET or PUT.
@@ -349,23 +354,38 @@ func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]b
 
 		switch method {
 		case http.MethodGet:
-			response, err = c.getQuery(ctx, uri)
+			request, err = http.NewRequest(method, uri, nil)
+			if err != nil {
+				if err2 == nil { // do not overwrite a previous error with this error
+					err2 = err
+				}
+				method = http.MethodPut // try again using PUT
+				continue
+			}
 		case http.MethodPut:
-			response, err = c.putQuery(ctx, endpoint, expression)
+			requestForm := url.Values{"query": []string{expression}}
+			requestBody := strings.NewReader(requestForm.Encode())
+			request, err = http.NewRequest(method, endpoint, requestBody)
+			if err != nil {
+				if err2 == nil { // do not overwrite a previous error with this error
+					err2 = err
+				}
+				method = http.MethodGet // try again using GET
+				continue
+			}
+			request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		default:
-			// should not get here because we set method above
-			panic(fmt.Errorf("cannot use unsupported HTTP method: %q", method))
+			panic(fmt.Errorf("this library should not have specified unsupported HTTP method: %q", method))
 		}
 
+		// Attach the context and dispatch the request.
+		response, err := c.httpClient.Do(request.WithContext(ctx))
 		if err != nil {
-			// Could not make network request, or perhaps context closed by
-			// caller while waiting for response.
 			return nil, err
 		}
 
 		// Network round trip completed successfully, but there still might be
 		// an error condition encoded in the response.
-
 		switch response.StatusCode {
 		case http.StatusOK:
 			if message := response.Header.Get("RangeException"); message != "" {
@@ -380,31 +400,16 @@ func (c *Client) getFromRangeServer(ctx context.Context, expression string) ([]b
 		case http.StatusMethodNotAllowed:
 			method = http.MethodGet // try again using GET
 		}
-		herr = ErrStatusNotOK{
+
+		// One of several possible errors occurred.  Store the error to return
+		// it to the client if this is the last request attempt.
+		err2 = ErrStatusNotOK{
 			Status:     response.Status,
 			StatusCode: response.StatusCode,
 		}
 	}
 
-	return nil, herr
-}
-
-func (c *Client) getQuery(ctx context.Context, url string) (*http.Response, error) {
-	request, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	return c.httpClient.Do(request.WithContext(ctx))
-}
-
-func (c *Client) putQuery(ctx context.Context, endpoint, expression string) (*http.Response, error) {
-	form := url.Values{"query": []string{expression}}
-	request, err := http.NewRequest(http.MethodPut, endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	return c.httpClient.Do(request.WithContext(ctx))
+	return nil, err2
 }
 
 // readAndClose reads all bytes from rc then closes it.  It returns any errors
