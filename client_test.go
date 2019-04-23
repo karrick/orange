@@ -35,6 +35,52 @@ func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), c
 }
 
 func TestClient(t *testing.T) {
+	t.Run("correct request format", func(t *testing.T) {
+		t.Run("GET", func(t *testing.T) {
+			h := func(w http.ResponseWriter, r *http.Request) {
+				if got, want := r.URL.Path, "/range/list"; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
+				if got, want := r.URL.RawQuery, "%7Bfoo%2Cbar%7D"; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
+			}
+			withClient(t, h, func(client *Client) {
+				_, err := client.Query("{foo,bar}")
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+		t.Run("PUT", func(t *testing.T) {
+			// Force initial use of PUT by creating very long query.
+			var expression, requestBody strings.Builder
+			requestBody.WriteString("query=")
+			for i := 0; i < defaultQueryLengthThreshold; i++ {
+				expression.WriteString("{")
+				requestBody.WriteString("%7B")
+			}
+
+			h := func(w http.ResponseWriter, r *http.Request) {
+				if got, want := r.URL.Path, "/range/list"; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
+				buf, err := readAndClose(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := string(buf), requestBody.String(); got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
+			}
+			withClient(t, h, func(client *Client) {
+				_, err := client.Query(expression.String())
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	})
 	t.Run("normal", func(t *testing.T) {
 		t.Run("empty", func(t *testing.T) {
 			t.Run("sans newline", func(t *testing.T) {
