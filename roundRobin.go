@@ -11,7 +11,8 @@ import (
 // initialized. On rollover, it returns the first value from the list.
 type roundRobinStrings struct {
 	r *ring.Ring
-	l sync.Mutex
+	l int
+	m sync.Mutex
 }
 
 func newRoundRobinStrings(someStrings []string) (*roundRobinStrings, error) {
@@ -24,22 +25,22 @@ func newRoundRobinStrings(someStrings []string) (*roundRobinStrings, error) {
 	r := ring.New(l)
 
 	// Populate data structure with values.
-	for _, value := range someStrings {
+	for _, s := range someStrings {
+		r.Value = s
 		r = r.Next()
-		r.Value = value
 	}
 
-	return &roundRobinStrings{r: r}, nil
+	return &roundRobinStrings{r: r, l: l}, nil
 }
 
 // Len returns the number of strings in the roundRobinStrings structure.
-func (rr *roundRobinStrings) Len() int { return rr.r.Len() }
+func (rr *roundRobinStrings) Len() int { return rr.l }
 
 // Next returns the next string in the roundRobinStrings structure.
 func (rr *roundRobinStrings) Next() string {
-	rr.l.Lock()
+	rr.m.Lock()
 	next := rr.r.Next()
 	rr.r = next
-	rr.l.Unlock()
+	rr.m.Unlock()
 	return next.Value.(string)
 }
