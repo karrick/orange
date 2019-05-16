@@ -272,6 +272,7 @@ func (c *Client) QueryBytesCtx(ctx context.Context, expression string) ([]byte, 
 // query issues the specified range expression as a query using the provided
 // context, returning either a response structure or the resulting error.
 func (c *Client) query(ctx context.Context, expression string) (*response, error) {
+	done := ctx.Done()
 	ch := make(chan struct{})
 	var buf []byte
 	var err error
@@ -287,6 +288,15 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 			// final attempt.
 			if attempts > 0 && c.retryPause > 0 {
 				time.Sleep(c.retryPause)
+
+				// After wake-up, ensure context has not closed, and return
+				// early if it has without sending another query whose results
+				// will be simply thrown away.
+				select {
+				case <-done:
+					return
+				default:
+				}
 			}
 
 			buf, err = c.queryServer(ctx, expression, c.servers.Next())
@@ -302,7 +312,7 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 	// Block and wait for either a response or the context to be closed by the
 	// caller.
 	select {
-	case <-ctx.Done():
+	case <-done:
 		return nil, ctx.Err()
 	case <-ch:
 		if err == nil {
