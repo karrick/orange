@@ -272,17 +272,15 @@ func (c *Client) QueryBytesCtx(ctx context.Context, expression string) ([]byte, 
 // query issues the specified range expression as a query using the provided
 // context, returning either a response structure or the resulting error.
 func (c *Client) query(ctx context.Context, expression string) (*response, error) {
-	type responseResult struct {
-		r *response
-		e error
-	}
-
-	ch := make(chan responseResult, 1)
+	ch := make(chan struct{})
+	var buf []byte
+	var err error
 
 	// Spawn a go-routine to send queries to one or more range servers, as
 	// allowed by the client's Servers and Retry settings.
 	go func() {
 		var attempts int
+
 		for {
 			// If not first attempt, and there is a retry pause, then wait.
 			// This logic will neither sleep on the first attempt nor after the
@@ -291,13 +289,9 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 				time.Sleep(c.retryPause)
 			}
 
-			buf, err := c.queryServer(ctx, expression, c.servers.Next())
-			if attempts == c.retryCount || err == nil || c.retryCallback(err) == false {
-				if err == nil {
-					ch <- responseResult{r: newResponse(buf)}
-				} else {
-					ch <- responseResult{e: err}
-				}
+			buf, err = c.queryServer(ctx, expression, c.servers.Next())
+			if err == nil || attempts == c.retryCount || c.retryCallback(err) == false {
+				close(ch)
 				return
 			}
 
@@ -310,8 +304,11 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case rr := <-ch:
-		return rr.r, rr.e
+	case <-ch:
+		if err == nil {
+			return newResponse(buf), nil
+		}
+		return nil, err
 	}
 }
 
