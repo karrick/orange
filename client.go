@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-// defaultQueryLengthThreshold defines the maximum length of the URI for an
+// defaultQueryURILengthThreshold defines the maximum length of the URI for an
 // outgoing GET query.  Queries that require a longer URI will automatically be
 // sent out via a PUT query.
-const defaultQueryLengthThreshold = 4096
+const defaultQueryURILengthThreshold = 4096
 
 // Client provides a Query method that resolves range queries.
 type Client struct {
@@ -149,18 +149,14 @@ func NewClient(config *Config) (*Client, error) {
 //         }
 //     }
 func (c *Client) Query(expression string) ([]string, error) {
-	r, err := c.query(context.Background(), expression)
-	if err == nil {
-		return r.Split(), nil
-	}
-	return nil, err
+	return c.QueryCtx(context.Background(), expression)
 }
 
 // QueryCtx sends the query expression to the range client with the provided
 // query context.  Callers may opt to use this method when a timeout is required
 // for the query.  Note that the shorter timeout applies when using a
 // http.Client timeout and a context timeout.  If you intend to only use
-// QueryCtx and QueryBytesCtx, then also you might want to pass a different
+// QueryCtx and QueryCallback, then also you might want to pass a different
 // HTTPClient argument to the Config so the two timeouts do not cause unexpected
 // results.
 //
@@ -199,82 +195,41 @@ func (c *Client) Query(expression string) ([]string, error) {
 //         fmt.Println(values)
 //     }
 func (c *Client) QueryCtx(ctx context.Context, expression string) ([]string, error) {
-	r, err := c.query(ctx, expression)
-	if err == nil {
-		return r.Split(), nil
+	var lines []string
+
+	err := c.QueryCallback(ctx, expression, func(ior io.Reader) error {
+		buf, err := ioutil.ReadAll(ior)
+		if err != nil {
+			return err
+		}
+		c := len(buf)
+		if c == 0 {
+			return nil // empty response
+		}
+		if buf[c-1] == '\n' {
+			buf = buf[:c-1] // Trim final byte when it is newline.
+			if len(buf) == 0 {
+				return nil // nothing left after trimming
+			}
+		}
+		lines = strings.Split(string(buf), "\n")
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+
+	return lines, nil
 }
 
-// QueryBytes sends out a query and returns either a slice of bytes
-// corresponding to the HTTP response body received from the range server, or an
-// error.
-//
-// The query is sent to one or more of the configured range servers.  If a
-// particular query results in an error, the query is retried according to the
-// client's RetryCount setting.
-//
-// If a response includes a RangeException header, it returns ErrRangeException.
-// If a query's response HTTP status code is not okay, it returns
-// ErrStatusNotOK.
-//
-//     func main() {
-//         // Create a range client.  Programs can list more than one server and
-//         // include other options.  See Config structure documentation for specifics.
-//         client, err := orange.NewClient(&orange.Config{
-//             Servers: []string{"localhost:8081"},
-//         })
-//         if err != nil {
-//             fmt.Fprintf(os.Stderr, "%s\n", err)
-//             os.Exit(1)
-//         }
-//
-//         // Example program main loop reads query from standard input, queries the
-//         // range server, then prints the response.
-//         fmt.Printf("> ")
-//         scanner := bufio.NewScanner(os.Stdin)
-//         for scanner.Scan() {
-//             buf, err := client.QueryBytes(scanner.Text())
-//             if err != nil {
-//                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//                 fmt.Printf("> ")
-//                 continue
-//             }
-//             fmt.Println(string(buf))
-//         }
-//         if err := scanner.Err(); err != nil {
-//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//         }
-//     }
-func (c *Client) QueryBytes(expression string) ([]byte, error) {
-	r, err := c.query(context.Background(), expression)
-	if err == nil {
-		return r.Bytes(), nil
-	}
-	return nil, err
-}
-
-// QueryBytesCtx sends the query expression to the range client with the
-// provided query context.  Callers may opt to use this method when a timeout is
-// required for the query.  Note that the shorter timeout applies when using a
-// http.Client timeout and a context timeout.  If you intend to only use
-// QueryCtx and QueryBytesCtx, then you also might want to pass a different
-// HTTPClient argument to the Config so the two timeouts do not cause unexpected
-// results.
-func (c *Client) QueryBytesCtx(ctx context.Context, expression string) ([]byte, error) {
-	r, err := c.query(ctx, expression)
-	if err == nil {
-		return r.Bytes(), nil
-	}
-	return nil, err
-}
-
-// query issues the specified range expression as a query using the provided
-// context, returning either a response structure or the resulting error.
-func (c *Client) query(ctx context.Context, expression string) (*response, error) {
+// QueryCallback sends the query expression to the range client with the
+// provided query context.  Upon successful response, invokes specified callback
+// function with an io.Reader configured to read the response body from the
+// range server.
+func (c *Client) QueryCallback(ctx context.Context, expression string, callback func(io.Reader) error) error {
 	done := ctx.Done()
 	ch := make(chan struct{})
-	var buf []byte
 	var err error
 
 	// Spawn a go-routine to send queries to one or more range servers, as
@@ -299,7 +254,7 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 				}
 			}
 
-			buf, err = c.queryServer(ctx, expression, c.servers.Next())
+			err = c.query(ctx, expression, callback, c.servers.Next())
 			if err == nil || attempts == c.retryCount || c.retryCallback(err) == false {
 				close(ch)
 				return
@@ -313,23 +268,17 @@ func (c *Client) query(ctx context.Context, expression string) (*response, error
 	// caller.
 	select {
 	case <-done:
-		return nil, ctx.Err()
+		return ctx.Err()
 	case <-ch:
-		if err == nil {
-			return newResponse(buf), nil
-		}
-		return nil, err
+		return err
 	}
 }
 
-// queryServer sends to server the query and returns either a byte slice from
-// reading the valid server response, or an error.
-//
 // This function attempts to send the query using both GET and PUT HTTP methods.
 // It defaults to using GET first, then trying PUT, unless the query length is
 // longer than a program constant, in which case it first tries PUT then will
 // try GET.
-func (c *Client) queryServer(ctx context.Context, expression, server string) ([]byte, error) {
+func (c *Client) query(ctx context.Context, expression string, callback func(io.Reader) error, server string) error {
 	var err, err2 error
 	var request *http.Request
 
@@ -340,7 +289,7 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 	// Default to using GET request because most servers support it. However,
 	// opt for PUT when extremely long query length.
 	var method string
-	if len(uri) > defaultQueryLengthThreshold {
+	if len(uri) > defaultQueryURILengthThreshold {
 		method = http.MethodPut
 	} else {
 		method = http.MethodGet
@@ -351,7 +300,7 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 		// Bail early when reequest context has already been closed.
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err() // terminate when client has canceled the context
+			return ctx.Err() // terminate when client has canceled the context
 		default:
 			// context still valid: fallthrough and send out a query attempt
 		}
@@ -383,7 +332,7 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 		// Attach the context and dispatch the request.
 		response, err := c.httpClient.Do(request.WithContext(ctx))
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// Network round trip completed successfully, but there still might be
@@ -391,12 +340,21 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 		switch response.StatusCode {
 		case http.StatusOK:
 			if message := response.Header.Get("RangeException"); message != "" {
-				return nil, ErrRangeException{Message: message}
+				return ErrRangeException{Message: message}
 			}
 			//
 			// NORMAL EXIT PATH: range server provided non-error response
 			//
-			return readAndClose(response.Body)
+			e1 := callback(response.Body)
+			_, e2 := io.Copy(ioutil.Discard, response.Body) // so we can reuse connections via Keep-Alive
+			e3 := response.Body.Close()
+			if e1 != nil {
+				return e1
+			}
+			if e2 != nil {
+				return e2
+			}
+			return e3
 		case http.StatusRequestURITooLong:
 			method = http.MethodPut // try again using PUT
 		case http.StatusMethodNotAllowed:
@@ -411,19 +369,5 @@ func (c *Client) queryServer(ctx context.Context, expression, server string) ([]
 		}
 	}
 
-	return nil, err2
-}
-
-// readAndClose reads all bytes from rc then closes it.  It returns any errors
-// that occurred when either reading or closing rc.
-func readAndClose(rc io.ReadCloser) ([]byte, error) {
-	buf, rerr := ioutil.ReadAll(rc)
-	cerr := rc.Close() // always close regardless of read error
-	if rerr != nil {
-		return nil, rerr // Read error has more context than Close error
-	}
-	if cerr != nil {
-		return nil, cerr
-	}
-	return buf, nil
+	return err2
 }

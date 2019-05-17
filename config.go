@@ -27,7 +27,7 @@ type Config struct {
 	// HTTPClient allows the caller to specify a specially configured
 	// http.Client instance to use for all queries.  When none is provided, a
 	// client will be created using the default timeouts.  If you intend to only
-	// use QueryCtx and QueryBytesCtx, then you also might want to pass a
+	// use QueryCtx and QueryCallback, then you also might want to pass a
 	// different HTTPClient argument to the Config so the two timeouts do not
 	// cause unexpected results.
 	HTTPClient Doer

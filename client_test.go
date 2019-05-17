@@ -2,6 +2,8 @@ package orange
 
 import (
 	"context"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -9,6 +11,20 @@ import (
 	"testing"
 	"time"
 )
+
+// readAndClose reads all bytes from rc then closes it.  It returns any errors
+// that occurred when either reading or closing rc.
+func readAndClose(rc io.ReadCloser) ([]byte, error) {
+	buf, rerr := ioutil.ReadAll(rc)
+	cerr := rc.Close() // always close regardless of read error
+	if rerr != nil {
+		return nil, rerr // Read error has more context than Close error
+	}
+	if cerr != nil {
+		return nil, cerr
+	}
+	return buf, nil
+}
 
 func httpError(w http.ResponseWriter, code int) {
 	http.Error(w, strconv.Itoa(code)+" "+http.StatusText(code), code)
@@ -35,6 +51,9 @@ func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), c
 }
 
 func TestClient(t *testing.T) {
+	// NOTE: Following tests invoke the Query method, indirectly also testing
+	// the QueryCtx and QueryCallback methods.
+
 	t.Run("correct request format", func(t *testing.T) {
 		t.Run("GET", func(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +75,7 @@ func TestClient(t *testing.T) {
 			// Force initial use of PUT by creating very long query.
 			var expression, requestBody strings.Builder
 			requestBody.WriteString("query=")
-			for i := 0; i < defaultQueryLengthThreshold; i++ {
+			for i := 0; i < defaultQueryURILengthThreshold; i++ {
 				expression.WriteString("{")
 				requestBody.WriteString("%7B")
 			}
@@ -263,7 +282,7 @@ func TestClient(t *testing.T) {
 			withClient(t, h, func(client *Client) {
 				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
-				for i := 0; i < defaultQueryLengthThreshold; i++ {
+				for i := 0; i < defaultQueryURILengthThreshold; i++ {
 					expression.WriteString(".")
 				}
 
