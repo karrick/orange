@@ -274,20 +274,26 @@ func (c *Client) QueryCallback(ctx context.Context, expression string, callback 
 	}
 }
 
-// This function attempts to send the query using both GET and PUT HTTP methods.
-// It defaults to using GET first, then trying PUT, unless the query length is
-// longer than a program constant, in which case it first tries PUT then will
-// try GET.
+// query attempts to fetch the results from querying a range server with the
+// specified range expression.
+//
+// It prefers using the GET method when the resulting URI is fewer characters
+// than a configured limit, but will re-send the query using the PUT method if
+// the range server returns method not allowed response.  When the resulting URI
+// is or exceeds a configured limit, it prefers using the PUT method, but will
+// re-send the query using the GET method if the range server returns a Method
+// Not Allowed,
 func (c *Client) query(ctx context.Context, expression string, callback func(io.Reader) error, server string) error {
-	var err, err2 error
+	var err, prevErr error
 	var request *http.Request
+	var wasGetTried, wasPutTried bool
 
-	endpoint := fmt.Sprintf("http://%s/range/list", server)
+	endpoint := "http://" + server + "/range/list"
 	escaped := url.QueryEscape(expression)
-	uri := fmt.Sprintf("%s?%s", endpoint, escaped)
+	uri := endpoint + "?" + escaped
 
-	// Default to using GET request because most servers support it. However,
-	// opt for PUT when extremely long query length.
+	// Default to using GET method because most servers support it. However, use
+	// PUT method when extremely long query length.
 	var method string
 	if len(uri) > defaultQueryURILengthThreshold {
 		method = http.MethodPut
@@ -295,33 +301,30 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 		method = http.MethodGet
 	}
 
-	// At least 2 tries so we can try GET or PUT if server gives us 405 or 414.
-	for i := 0; i < 2; i++ {
-		// Bail early when reequest context has already been closed.
-		select {
-		case <-ctx.Done():
-			return ctx.Err() // terminate when client has canceled the context
-		default:
-			// context still valid: fallthrough and send out a query attempt
-		}
-
+	for {
 		switch method {
 		case http.MethodGet:
+			if wasGetTried {
+				return prevErr
+			}
+			wasGetTried = true
+
 			request, err = http.NewRequest(method, uri, nil)
 			if err != nil {
-				if err2 == nil { // do not overwrite a previous error with this error
-					err2 = err
-				}
 				method = http.MethodPut // try again using PUT
+				prevErr = err
 				continue
 			}
 		case http.MethodPut:
+			if wasPutTried {
+				return prevErr
+			}
+			wasPutTried = true
+
 			request, err = http.NewRequest(method, endpoint, strings.NewReader("query="+escaped))
 			if err != nil {
-				if err2 == nil { // do not overwrite a previous error with this error
-					err2 = err
-				}
 				method = http.MethodGet // try again using GET
+				prevErr = err
 				continue
 			}
 			request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
@@ -335,39 +338,82 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 			return err
 		}
 
-		// Network round trip completed successfully, but there still might be
-		// an error condition encoded in the response.
-		switch response.StatusCode {
-		case http.StatusOK:
+		// Network request completed successfully, but there still might be an error
+		// condition encoded in the response.
+		if response.StatusCode == http.StatusOK {
 			if message := response.Header.Get("RangeException"); message != "" {
 				return ErrRangeException{Message: message}
 			}
 			//
 			// NORMAL EXIT PATH: range server provided non-error response
 			//
-			e1 := callback(response.Body)
-			_, e2 := io.Copy(ioutil.Discard, response.Body) // so we can reuse connections via Keep-Alive
-			e3 := response.Body.Close()
-			if e1 != nil {
-				return e1
+			prevErr = callback(response.Body)
+			err = discard(response.Body)
+			if prevErr != nil {
+				return prevErr
 			}
-			if e2 != nil {
-				return e2
-			}
-			return e3
+			return err
+		}
+
+		switch response.StatusCode {
 		case http.StatusRequestURITooLong:
+			if wasPutTried {
+				return prevErr
+			}
 			method = http.MethodPut // try again using PUT
 		case http.StatusMethodNotAllowed:
+			if wasGetTried {
+				return prevErr
+			}
 			method = http.MethodGet // try again using GET
+		default:
+			// No more attempts will be made to this target server, so read
+			// response body and return its text in the error.
+			buf, err := bytesFromReadCloser(response.Body)
+			if err == nil && len(buf) > 0 {
+				return ErrStatusNotOK{
+					Status:     string(buf),
+					StatusCode: response.StatusCode,
+				}
+			}
+			return ErrStatusNotOK{
+				Status:     response.Status,
+				StatusCode: response.StatusCode,
+			}
 		}
 
-		// One of several possible errors occurred.  Store the error to return
-		// it to the client if this is the last request attempt.
-		err2 = ErrStatusNotOK{
-			Status:     response.Status,
-			StatusCode: response.StatusCode,
+		// Another attempt is warranted, so discard response body from this attempt,
+		// and try again.
+		_ = discard(response.Body)
+
+		// Before loop to make another try, abort when context is already done.
+		select {
+		case <-ctx.Done():
+			return ctx.Err() // terminate when client has canceled the context
+		default:
+			// context still valid: fallthrough and send out a query attempt
+			prevErr = err
 		}
 	}
+}
 
+func bytesFromReadCloser(iorc io.ReadCloser) ([]byte, error) {
+	buf, err1 := ioutil.ReadAll(iorc)
+	err2 := iorc.Close()
+	if err1 != nil {
+		return nil, err1
+	}
+	if err2 != nil {
+		return nil, err2
+	}
+	return buf, nil
+}
+
+func discard(iorc io.ReadCloser) error {
+	_, err1 := io.Copy(ioutil.Discard, iorc) // so we can reuse connections via Keep-Alive
+	err2 := iorc.Close()
+	if err1 != nil {
+		return err1
+	}
 	return err2
 }

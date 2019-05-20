@@ -2,33 +2,12 @@ package orange
 
 import (
 	"context"
-	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
-
-// readAndClose reads all bytes from rc then closes it.  It returns any errors
-// that occurred when either reading or closing rc.
-func readAndClose(rc io.ReadCloser) ([]byte, error) {
-	buf, rerr := ioutil.ReadAll(rc)
-	cerr := rc.Close() // always close regardless of read error
-	if rerr != nil {
-		return nil, rerr // Read error has more context than Close error
-	}
-	if cerr != nil {
-		return nil, cerr
-	}
-	return buf, nil
-}
-
-func httpError(w http.ResponseWriter, code int) {
-	http.Error(w, strconv.Itoa(code)+" "+http.StatusText(code), code)
-}
 
 func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*httptest.Server)) {
 	server := httptest.NewServer(http.HandlerFunc(h))
@@ -84,7 +63,7 @@ func TestClient(t *testing.T) {
 				if got, want := r.URL.Path, "/range/list"; got != want {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
-				buf, err := readAndClose(r.Body)
+				buf, err := bytesFromReadCloser(r.Body)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -242,16 +221,20 @@ func TestClient(t *testing.T) {
 
 	t.Run("retries query", func(t *testing.T) {
 		t.Run("with PUT when server returns uri too long", func(t *testing.T) {
+			var getInvocationCount, putInvocationCount int
+
 			h := func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodGet:
-					httpError(w, http.StatusRequestURITooLong)
+					getInvocationCount++
+					http.Error(w, r.RequestURI, http.StatusRequestURITooLong)
 				case http.MethodPut:
+					putInvocationCount++
 					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
 						t.Fatal(err)
 					}
 				default:
-					httpError(w, http.StatusMethodNotAllowed)
+					http.Error(w, r.Method, http.StatusMethodNotAllowed)
 				}
 			}
 			withClient(t, h, func(client *Client) {
@@ -261,21 +244,30 @@ func TestClient(t *testing.T) {
 				}
 				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 			})
+
+			if got, want := getInvocationCount, 1; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+
+			if got, want := putInvocationCount, 1; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
 		})
 		t.Run("with GET when server returns method not allowed", func(t *testing.T) {
-			var wasPutInvoked bool
+			var getInvocationCount, putInvocationCount int
 
 			h := func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodGet:
+					getInvocationCount++
 					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
 						t.Fatal(err)
 					}
 				case http.MethodPut:
-					wasPutInvoked = true
+					putInvocationCount++
 					fallthrough
 				default:
-					httpError(w, http.StatusMethodNotAllowed)
+					http.Error(w, r.Method, http.StatusMethodNotAllowed)
 				}
 			}
 
@@ -293,7 +285,69 @@ func TestClient(t *testing.T) {
 				ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
 			})
 
-			if got, want := wasPutInvoked, true; got != want {
+			if got, want := getInvocationCount, 1; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+
+			if got, want := putInvocationCount, 1; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+		})
+		t.Run("will not try GET multiple times", func(t *testing.T) {
+			var getInvocationCount, putInvocationCount int
+
+			h := func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					getInvocationCount++
+				case http.MethodPut:
+					putInvocationCount++
+				}
+				http.Error(w, "testing", http.StatusServiceUnavailable)
+			}
+
+			withClient(t, h, func(client *Client) {
+				_, err := client.Query("%some.short.expression")
+				ensureError(t, err, "testing")
+			})
+
+			if got, want := getInvocationCount, 1; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+
+			if got, want := putInvocationCount, 0; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+		})
+		t.Run("will not try PUT multiple times", func(t *testing.T) {
+			var getInvocationCount, putInvocationCount int
+
+			h := func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					getInvocationCount++
+				case http.MethodPut:
+					putInvocationCount++
+				}
+				http.Error(w, "testing", http.StatusServiceUnavailable)
+			}
+
+			withClient(t, h, func(client *Client) {
+				// Force initial use of PUT by creating very long query.
+				var expression strings.Builder
+				for i := 0; i < defaultQueryURILengthThreshold; i++ {
+					expression.WriteString(".")
+				}
+
+				_, err := client.Query(expression.String())
+				ensureError(t, err, "testing")
+			})
+
+			if got, want := getInvocationCount, 0; got != want {
+				t.Errorf("GOT: %v; WANT: %v", got, want)
+			}
+
+			if got, want := putInvocationCount, 1; got != want {
 				t.Errorf("GOT: %v; WANT: %v", got, want)
 			}
 		})
