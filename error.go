@@ -2,7 +2,9 @@ package orange
 
 import (
 	"net"
+	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // ErrRangeException is returned when the response includes
@@ -22,7 +24,7 @@ type ErrStatusNotOK struct {
 }
 
 func (err ErrStatusNotOK) Error() string {
-	return err.Status
+	return strconv.Itoa(err.StatusCode) + " " + http.StatusText(err.StatusCode) + ": " + err.Status
 }
 
 ////////////////////////////////////////
