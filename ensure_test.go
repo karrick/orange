@@ -22,7 +22,7 @@ func ensureError(tb testing.TB, err error, contains string) {
 	tb.Helper()
 	if contains == "" {
 		if err != nil {
-			tb.Errorf("GOT: %v; WANT: %v", err, contains)
+			tb.Fatalf("GOT: %v; WANT: %v", err, contains)
 		}
 	} else {
 		if err == nil || !strings.Contains(err.Error(), contains) {
