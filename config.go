@@ -46,9 +46,19 @@ type Config struct {
 	// Servers is slice of range server address strings.  Must contain at least
 	// one string.
 	Servers []string
+
+	// Verbose, when not nil, is invoked with verbose messages.
+	Verbose Printer
+
+	// Warnings, when not nil, is invoked with warning messages.
+	Warnings Printer
 }
 
 // Doer performs the specfied http.Request and returns the http.Response.
 type Doer interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+type Printer interface {
+	Printf(string, ...interface{})
 }

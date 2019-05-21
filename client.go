@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -22,11 +23,12 @@ type Client struct {
 	// The only thing that prevents us from exposing a structure with all public
 	// fields is the fact that we need to create the round robin list of
 	// servers, and validate other config parameters.
-	httpClient    Doer
-	servers       *roundRobinStrings
-	retryCallback func(error) bool
-	retryCount    int
-	retryPause    time.Duration
+	httpClient        Doer
+	servers           *roundRobinStrings
+	retryCallback     func(error) bool
+	retryCount        int
+	retryPause        time.Duration
+	verbose, warnings Printer
 }
 
 // NewClient returns a new instance that sends queries to one or more range
@@ -104,6 +106,13 @@ func NewClient(config *Config) (*Client, error) {
 		retryCount:    config.RetryCount,
 		retryPause:    config.RetryPause,
 		servers:       rrs,
+		// verbose:       config.Verbose,
+		// warnings:      config.Warnings,
+	}
+
+	fmt.Fprintf(os.Stderr, "config.Warnings: %T %p\n", config.Warnings, config.Warnings)
+	if config.Verbose != nil {
+		fmt.Fprintf(os.Stderr, "config.Verbose: %p\n", config.Verbose)
 	}
 
 	return client, nil
@@ -232,6 +241,10 @@ func (c *Client) QueryCallback(ctx context.Context, expression string, callback 
 	ch := make(chan struct{})
 	var err error
 
+	if c.verbose != nil {
+		c.verbose.Printf("range query: %s\n", expression)
+	}
+
 	// Spawn a go-routine to send queries to one or more range servers, as
 	// allowed by the client's Servers and Retry settings.
 	go func() {
@@ -255,7 +268,16 @@ func (c *Client) QueryCallback(ctx context.Context, expression string, callback 
 			}
 
 			err = c.query(ctx, expression, callback, c.servers.Next())
-			if err == nil || attempts == c.retryCount || c.retryCallback(err) == false {
+			if err == nil {
+				close(ch)
+				return
+			}
+
+			if c.warnings != nil {
+				c.warnings.Printf("FLUBBER: %s\n", err)
+			}
+
+			if attempts == c.retryCount || c.retryCallback(err) == false {
 				close(ch)
 				return
 			}
@@ -302,6 +324,11 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 	}
 
 	for {
+		var startTime time.Time
+		if c.verbose != nil {
+			startTime = time.Now()
+		}
+
 		switch method {
 		case http.MethodGet:
 			if wasGetTried {
@@ -336,6 +363,15 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 		response, err := c.httpClient.Do(request.WithContext(ctx))
 		if err != nil {
 			return err
+		}
+
+		if c.verbose != nil {
+			switch method {
+			case http.MethodGet:
+				c.verbose.Printf("%s %q; latency: %s\n", method, uri, time.Now().Sub(startTime))
+			case http.MethodPut:
+				c.verbose.Printf("%s %q; latency: %s\n", method, endpoint, time.Now().Sub(startTime))
+			}
 		}
 
 		// Network request completed successfully, but there still might be an error

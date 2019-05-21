@@ -1,20 +1,37 @@
 package orange
 
-// NOTE: This file was copied from https://github.com/karrick/gorill
-
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
 )
 
-func ensureBuffer(tb testing.TB, buf []byte, n int, want string) {
+type accreter []byte
+
+func newAccreter() *accreter {
+	var a accreter
+	return &a
+}
+
+func (a *accreter) Printf(f string, v ...interface{}) {
+	s := fmt.Sprintf(f, v...)
+	// fmt.Fprintf(os.Stderr, "Printf: %s", s)
+	*a = append(*a, s...)
+}
+
+func (a *accreter) Bytes() []byte { return *a }
+
+func ensureLogged(tb testing.TB, a *accreter, contains string) {
 	tb.Helper()
-	if got, want := n, len(want); got != want {
-		tb.Fatalf("GOT: %v; WANT: %v", got, want)
-	}
-	if got, want := string(buf[:n]), want; got != want {
-		tb.Errorf("GOT: %v; WANT: %v", got, want)
+	if contains == "" {
+		if got, want := a.Bytes(), []byte(nil); len(got) != 0 {
+			tb.Errorf("GOT: %q; WANT: %v", got, want)
+		}
+	} else {
+		if got, want := a.Bytes(), []byte(contains); !bytes.Contains(got, want) {
+			tb.Errorf("GOT: %q; WANT: %q", got, want)
+		}
 	}
 }
 

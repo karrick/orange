@@ -15,12 +15,14 @@ func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request
 	callback(server)
 }
 
-func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*Client)) {
+func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), verbose, warnings Printer, callback func(*Client)) {
 	withTestServer(tb, h, func(server *httptest.Server) {
 		client, err := NewClient(&Config{
 			HTTPClient: server.Client(),
 			RetryCount: 2,
 			Servers:    []string{strings.TrimLeft(server.URL, "http://")},
+			Verbose:    verbose,
+			Warnings:   warnings,
 		})
 		if err != nil {
 			tb.Fatal(err)
@@ -32,6 +34,7 @@ func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), c
 func TestClient(t *testing.T) {
 	// NOTE: Following tests invoke the Query method, indirectly also testing
 	// the QueryCtx and QueryCallback methods.
+	var verbose, warnings Printer
 
 	t.Run("correct request format", func(t *testing.T) {
 		t.Run("GET", func(t *testing.T) {
@@ -43,12 +46,18 @@ func TestClient(t *testing.T) {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			verbose := newAccreter()
+			warnings := newAccreter()
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				_, err := client.Query("{foo,bar}")
 				if err != nil {
 					t.Fatal(err)
 				}
 			})
+			ensureLogged(t, verbose, "range query: {foo,bar}")
+			ensureLogged(t, verbose, "GET")
+			ensureLogged(t, verbose, "/range/list?%7Bfoo%2Cbar%7D\"; latency: ")
+			ensureLogged(t, warnings, "")
 		})
 		t.Run("PUT", func(t *testing.T) {
 			// Force initial use of PUT by creating very long query.
@@ -71,12 +80,18 @@ func TestClient(t *testing.T) {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			verbose := newAccreter()
+			warnings := newAccreter()
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				_, err := client.Query(expression.String())
 				if err != nil {
 					t.Fatal(err)
 				}
 			})
+			ensureLogged(t, verbose, "range query:")
+			ensureLogged(t, verbose, "PUT")
+			ensureLogged(t, verbose, "/range/list\"; latency: ")
+			ensureLogged(t, warnings, "")
 		})
 	})
 	t.Run("normal", func(t *testing.T) {
@@ -85,7 +100,7 @@ func TestClient(t *testing.T) {
 				h := func(w http.ResponseWriter, r *http.Request) {
 					// does not write anything
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -99,7 +114,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -116,7 +131,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -131,7 +146,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -148,7 +163,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -163,7 +178,7 @@ func TestClient(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				withClient(t, h, func(client *Client) {
+				withClient(t, h, verbose, warnings, func(client *Client) {
 					values, err := client.Query("foo")
 					if err != nil {
 						t.Fatal(err)
@@ -180,18 +195,24 @@ func TestClient(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
 				time.Sleep(timeout << 2)
 			}
-			withClient(t, h, func(client *Client) {
+			verbose := newAccreter()
+			warnings := newAccreter()
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				ctx, done := context.WithTimeout(context.Background(), timeout)
 				defer done()
 				_, err := client.QueryCtx(ctx, "foo")
 				ensureError(t, err, "deadline")
 			})
+			ensureLogged(t, verbose, "range query: foo")
+			ensureLogged(t, verbose, "GET")
+			ensureLogged(t, verbose, "/range/list?%7Bfoo%2Cbar%7D\"; latency: ")
+			ensureLogged(t, warnings, "")
 		})
 		t.Run("RangeException", func(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("RangeException", "some error")
 			}
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				_, err := client.Query("foo")
 				switch err.(type) {
 				case ErrRangeException:
@@ -207,7 +228,7 @@ func TestClient(t *testing.T) {
 			h := func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(e)
 			}
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				_, err := client.Query("foo")
 				switch err.(type) {
 				case ErrStatusNotOK:
@@ -237,7 +258,7 @@ func TestClient(t *testing.T) {
 					http.Error(w, r.Method, http.StatusMethodNotAllowed)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				values, err := client.Query("foo")
 				if err != nil {
 					t.Fatal(err)
@@ -271,7 +292,7 @@ func TestClient(t *testing.T) {
 				}
 			}
 
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
 				for i := 0; i < defaultQueryURILengthThreshold; i++ {
@@ -306,7 +327,7 @@ func TestClient(t *testing.T) {
 				http.Error(w, "testing", http.StatusServiceUnavailable)
 			}
 
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				_, err := client.Query("%some.short.expression")
 				ensureError(t, err, "testing")
 			})
@@ -332,7 +353,7 @@ func TestClient(t *testing.T) {
 				http.Error(w, "testing", http.StatusServiceUnavailable)
 			}
 
-			withClient(t, h, func(client *Client) {
+			withClient(t, h, verbose, warnings, func(client *Client) {
 				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
 				for i := 0; i < defaultQueryURILengthThreshold; i++ {
