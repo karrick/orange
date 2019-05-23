@@ -64,14 +64,14 @@ type Client struct {
 //     }
 func NewClient(config *Config) (*Client, error) {
 	if config.RetryCount < 0 {
-		return nil, fmt.Errorf("cannot create Querier with negative RetryCount: %d", config.RetryCount)
+		return nil, fmt.Errorf("cannot create Client with negative RetryCount: %d", config.RetryCount)
 	}
 	if config.RetryPause < 0 {
-		return nil, fmt.Errorf("cannot create Querier with negative RetryPause: %s", config.RetryPause)
+		return nil, fmt.Errorf("cannot create Client with negative RetryPause: %s", config.RetryPause)
 	}
 	rrs, err := newRoundRobinStrings(config.Servers)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create Querier without at least one range server address")
+		return nil, fmt.Errorf("cannot create Client without at least one range server address")
 	}
 
 	retryCallback := config.RetryCallback
@@ -127,7 +127,7 @@ func NewClient(config *Config) (*Client, error) {
 //             Servers: []string{"localhost:8081"},
 //         })
 //         if err != nil {
-//             fmt.Fprintf(os.Stderr, "%s\n", err)
+//             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 //             os.Exit(1)
 //         }
 //
@@ -188,16 +188,14 @@ func (c *Client) Query(expression string) ([]string, error) {
 //
 //         values, err := client.Query(strings.Join(flag.Args(), ","))
 //         if err != nil {
-//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
+//             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 //             os.Exit(1)
 //         }
 //
 //         fmt.Println(values)
 //     }
-func (c *Client) QueryCtx(ctx context.Context, expression string) ([]string, error) {
-	var lines []string
-
-	err := c.QueryCallback(ctx, expression, func(ior io.Reader) error {
+func (c *Client) QueryCtx(ctx context.Context, expression string) (lines []string, err error) {
+	err = c.QueryCallback(ctx, expression, func(ior io.Reader) error {
 		buf, err := ioutil.ReadAll(ior)
 		if err != nil {
 			return err
@@ -215,12 +213,7 @@ func (c *Client) QueryCtx(ctx context.Context, expression string) ([]string, err
 		lines = strings.Split(string(buf), "\n")
 		return nil
 	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return lines, nil
+	return
 }
 
 // QueryCallback sends the query expression to the range client with the
