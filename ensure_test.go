@@ -1,23 +1,11 @@
 package orange
 
-// NOTE: This file was copied from https://github.com/karrick/gorill
-
 import (
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
 )
-
-func ensureBuffer(tb testing.TB, buf []byte, n int, want string) {
-	tb.Helper()
-	if got, want := n, len(want); got != want {
-		tb.Fatalf("GOT: %v; WANT: %v", got, want)
-	}
-	if got, want := string(buf[:n]), want; got != want {
-		tb.Errorf("GOT: %v; WANT: %v", got, want)
-	}
-}
 
 func ensureError(tb testing.TB, err error, contains ...string) {
 	tb.Helper()
