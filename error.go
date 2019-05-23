@@ -7,8 +7,8 @@ import (
 	"strconv"
 )
 
-// ErrRangeException is returned when the response includes
-// an HTTP 'RangeException' header.
+// ErrRangeException is returned when the response includes an HTTP
+// 'RangeException' header.
 type ErrRangeException struct {
 	Message string
 }
@@ -51,13 +51,14 @@ func isTimeout(err error) bool {
 
 func makeRetryCallback(count int) func(error) bool {
 	return func(err error) bool {
-		// Because some DNSError errors can be temporary or timeout, most efficient to check
-		// whether those conditions are true first.
+		// Because some DNSError errors can be temporary or timeout, most
+		// efficient to check whether those conditions are true first.
 		if isTemporary(err) || isTimeout(err) {
 			return true
 		}
-		// And if error is neither temporary nor a timeout, then it might still be retryable
-		// if it's a DNSError and there are more than one servers configured to proxy for.
+		// And if error is neither temporary nor a timeout, then it might still
+		// be retryable if it's a DNSError and there are more than one servers
+		// configured to proxy for.
 		if urlError, ok := err.(*url.Error); ok {
 			if netOpError, ok := urlError.Err.(*net.OpError); ok {
 				if _, ok = netOpError.Err.(*net.DNSError); ok {
