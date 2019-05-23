@@ -1,18 +1,16 @@
 package orange
 
 import (
-	"container/ring"
 	"errors"
-	"sync"
+	"sync/atomic"
 )
 
 // roundRobinStrings returns a structure that on each invocation of its Next()
 // method, returns the next string value from the list of values when it was
-// initialized. On rollover, it returns the first value from the list.
+// initialized.  On rollover, it returns the first value from the list.
 type roundRobinStrings struct {
-	r *ring.Ring
-	l int
-	m sync.Mutex
+	values []string
+	i      uint32
 }
 
 func newRoundRobinStrings(someStrings []string) (*roundRobinStrings, error) {
@@ -22,25 +20,40 @@ func newRoundRobinStrings(someStrings []string) (*roundRobinStrings, error) {
 	}
 
 	// Create the data structure
-	r := ring.New(l)
-
-	// Populate data structure with values.
-	for _, s := range someStrings {
-		r.Value = s
-		r = r.Next()
+	rrs := &roundRobinStrings{
+		values: make([]string, l),
 	}
 
-	return &roundRobinStrings{r: r, l: l}, nil
+	// Populate data structure with values.
+	copy(rrs.values, someStrings)
+
+	return rrs, nil
 }
 
 // Len returns the number of strings in the roundRobinStrings structure.
-func (rr *roundRobinStrings) Len() int { return rr.l }
+func (rr *roundRobinStrings) Len() int { return len(rr.values) }
 
 // Next returns the next string in the roundRobinStrings structure.
 func (rr *roundRobinStrings) Next() string {
-	rr.m.Lock()
-	next := rr.r.Next()
-	rr.r = next
-	rr.m.Unlock()
-	return next.Value.(string)
+	l := uint32(len(rr.values))
+
+	// Fast case when only a single value in list.
+	if l == 1 {
+		return rr.values[0]
+	}
+
+	var i, ni uint32
+
+	for j := 0; j < 4; j++ {
+		i = atomic.LoadUint32(&rr.i)
+		ni = (i + 1) % l
+		if atomic.CompareAndSwapUint32(&rr.i, i, ni) {
+			return rr.values[i]
+		}
+	}
+
+	// During high contention, give up and send back the string corresponding to
+	// our last attempt.  This use-case does not require absolute perfect round
+	// robin order.  Do not let perfect be the enemy of good enough.
+	return rr.values[i]
 }
