@@ -360,19 +360,16 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 			}
 			method = http.MethodGet // try again using GET
 		default:
-			// No more attempts will be made to this target server, so read
-			// response body and return its text in the error.
-			buf, err := bytesFromReadCloser(response.Body)
-			if err == nil && len(buf) > 0 {
-				return ErrStatusNotOK{
-					Status:     string(buf),
-					StatusCode: response.StatusCode,
-				}
-			}
-			return ErrStatusNotOK{
+			e := ErrStatusNotOK{
 				Status:     response.Status,
 				StatusCode: response.StatusCode,
 			}
+			// Read response body and return its text in the error.
+			buf, err := bytesFromReadCloser(response.Body)
+			if l := len(buf); err == nil && l > 0 {
+				e.Body = buf
+			}
+			return e
 		}
 
 		// Another attempt is warranted, so discard response body from this attempt,

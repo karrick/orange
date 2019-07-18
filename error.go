@@ -2,9 +2,7 @@ package orange
 
 import (
 	"net"
-	"net/http"
 	"net/url"
-	"strconv"
 )
 
 // ErrRangeException is returned when the response includes an HTTP
@@ -19,12 +17,13 @@ func (err ErrRangeException) Error() string {
 
 // ErrStatusNotOK is returned when the response status code is not Ok.
 type ErrStatusNotOK struct {
-	Status     string
-	StatusCode int
+	Body       []byte // Body contains the HTTP response body from the server.
+	Status     string // Status is the canonical HTTP status message.
+	StatusCode int    // StatusCode contains the numerical HTTP status code from the server.
 }
 
 func (err ErrStatusNotOK) Error() string {
-	return strconv.Itoa(err.StatusCode) + " " + http.StatusText(err.StatusCode) + ": " + err.Status
+	return err.Status
 }
 
 ////////////////////////////////////////
