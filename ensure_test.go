@@ -74,3 +74,50 @@ func ensureStringSlicesMatch(tb testing.TB, actual, expected []string) {
 		}
 	}
 }
+
+func ensureDone(tb testing.TB, s *bufferScanner) {
+	tb.Helper()
+
+	// Scan and check results.
+	if got, want := s.Scan(), false; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Text(), ""; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Err(), error(nil); got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+
+	//  Do it again to ensure idempotent.
+	if got, want := s.Scan(), false; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Text(), ""; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Err(), error(nil); got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+}
+
+func ensureScan(tb testing.TB, s *bufferScanner, v string) {
+	tb.Helper()
+	if got, want := s.Scan(), true; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Text(), v; got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+	if got, want := s.Err(), error(nil); got != want {
+		tb.Errorf("GOT: %#v; WANT: %#v", got, want)
+	}
+}
+
+func ensureSequence(tb testing.TB, s *bufferScanner, seq []string) {
+	tb.Helper()
+	for _, want := range seq {
+		ensureScan(tb, s, want)
+	}
+	ensureDone(tb, s)
+}
