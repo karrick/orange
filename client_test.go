@@ -111,7 +111,7 @@ func TestClient(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					ensureStringSlicesMatch(t, values, nil)
+					ensureStringSlicesMatch(t, values, []string{""})
 				})
 			})
 		})
@@ -443,38 +443,10 @@ func BenchmarkLineSplitting(b *testing.B) {
 		w.Write(largeResponse)
 	}
 
-	b.Run("strings split", func(b *testing.B) {
-		withClient(b, h, func(client *Client) {
-			for i := 0; i < b.N; i++ {
-				values, err := client.QueryCtx(context.Background(), "foo")
-				if err != nil {
-					b.Fatal(err)
-				}
-				if got, want := len(values), lineCount; got != want {
-					b.Fatalf("GOT: %v; WANT: %v", got, want)
-				}
-			}
-		})
-	})
-
 	b.Run("bufio scanner", func(b *testing.B) {
 		withClient(b, h, func(client *Client) {
 			for i := 0; i < b.N; i++ {
-				values, err := client.queryCtxBufioScanner(context.Background(), "foo")
-				if err != nil {
-					b.Fatal(err)
-				}
-				if got, want := len(values), lineCount; got != want {
-					b.Fatalf("GOT: %v; WANT: %v", got, want)
-				}
-			}
-		})
-	})
-
-	b.Run("buffer scanner", func(b *testing.B) {
-		withClient(b, h, func(client *Client) {
-			for i := 0; i < b.N; i++ {
-				values, err := client.queryCtxBufferScanner(context.Background(), "foo")
+				values, err := client.QueryCtx(context.Background(), "foo")
 				if err != nil {
 					b.Fatal(err)
 				}

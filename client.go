@@ -197,47 +197,6 @@ func (c *Client) Query(expression string) ([]string, error) {
 //     }
 func (c *Client) QueryCtx(ctx context.Context, expression string) (lines []string, err error) {
 	err = c.QueryCallback(ctx, expression, func(ior io.Reader) error {
-		buf, err := ioutil.ReadAll(ior)
-		if err != nil {
-			return err
-		}
-		c := len(buf)
-		if c == 0 {
-			return nil // empty response
-		}
-		if buf[c-1] == '\n' {
-			buf = buf[:c-1] // Trim final byte when it is newline.
-			if len(buf) == 0 {
-				return nil // nothing left after trimming
-			}
-		}
-		lines = strings.Split(string(buf), "\n")
-		return nil
-	})
-	return
-}
-
-func (c *Client) queryCtxBufferScanner(ctx context.Context, expression string) (lines []string, err error) {
-	err = c.QueryCallback(ctx, expression, func(ior io.Reader) error {
-		buf, err := ioutil.ReadAll(ior)
-		if err != nil {
-			return err
-		}
-		c := len(buf)
-		if c == 0 {
-			return nil // empty response
-		}
-		s := newBufferScanner(buf)
-		for s.Scan() {
-			lines = append(lines, s.Text())
-		}
-		return s.Err()
-	})
-	return
-}
-
-func (c *Client) queryCtxBufioScanner(ctx context.Context, expression string) (lines []string, err error) {
-	err = c.QueryCallback(ctx, expression, func(ior io.Reader) error {
 		s := bufio.NewScanner(ior)
 		for s.Scan() {
 			lines = append(lines, s.Text())
