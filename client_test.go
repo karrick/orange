@@ -1,12 +1,10 @@
 package orange
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*httptest.Server)) {
@@ -15,16 +13,14 @@ func withTestServer(tb testing.TB, h func(w http.ResponseWriter, r *http.Request
 	callback(server)
 }
 
-func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*Client)) {
+func withTestClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), callback func(*Client)) {
 	withTestServer(tb, h, func(server *httptest.Server) {
 		client, err := NewClient(&Config{
 			HTTPClient: server.Client(),
 			RetryCount: 2,
 			Servers:    []string{strings.TrimLeft(server.URL, "http://")},
 		})
-		if err != nil {
-			tb.Fatal(err)
-		}
+		ensureError(tb, err)
 		callback(client)
 	})
 }
@@ -50,7 +46,7 @@ func TestClient(t *testing.T) {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				_, err := client.Query("{foo,bar}")
 				if err != nil {
 					t.Fatal(err)
@@ -67,6 +63,9 @@ func TestClient(t *testing.T) {
 			}
 
 			h := func(w http.ResponseWriter, r *http.Request) {
+				if got, want := r.Header.Get("Content-Type"), putContentType; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
 				if got, want := r.URL.Path, "/range/list"; got != want {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
@@ -78,204 +77,11 @@ func TestClient(t *testing.T) {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				_, err := client.Query(expression.String())
 				if err != nil {
 					t.Fatal(err)
 				}
-			})
-		})
-	})
-	t.Run("normal", func(t *testing.T) {
-		t.Run("empty", func(t *testing.T) {
-			t.Run("sans newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					// does not write anything
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, nil)
-				})
-			})
-			t.Run("with newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					if _, err := w.Write([]byte{'\n'}); err != nil {
-						t.Fatal(err)
-					}
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, []string{""})
-				})
-			})
-		})
-
-		t.Run("single", func(t *testing.T) {
-			t.Run("sans newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					if _, err := w.Write([]byte("result1")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, []string{"result1"})
-				})
-			})
-
-			t.Run("with newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					if _, err := w.Write([]byte("result1\n")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, []string{"result1"})
-				})
-			})
-		})
-
-		t.Run("double", func(t *testing.T) {
-			t.Run("sans newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					if _, err := w.Write([]byte("result1\nresult2")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
-				})
-			})
-
-			t.Run("with newline", func(t *testing.T) {
-				h := func(w http.ResponseWriter, r *http.Request) {
-					if _, err := w.Write([]byte("result1\nresult2\n")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				withClient(t, h, func(client *Client) {
-					values, err := client.Query("foo")
-					if err != nil {
-						t.Fatal(err)
-					}
-					ensureStringSlicesMatch(t, values, []string{"result1", "result2"})
-				})
-			})
-		})
-	})
-
-	t.Run("errors", func(t *testing.T) {
-		t.Run("context times out", func(t *testing.T) {
-			const timeout = time.Millisecond
-			h := func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(timeout << 2)
-			}
-			withClient(t, h, func(client *Client) {
-				ctx, done := context.WithTimeout(context.Background(), timeout)
-				defer done()
-				_, err := client.QueryCtx(ctx, "foo")
-				ensureError(t, err, "deadline")
-			})
-		})
-
-		t.Run("RangeException", func(t *testing.T) {
-			h := func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("RangeException", "some error")
-				w.Write([]byte("body1\nbody2\n"))
-			}
-			withClient(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				switch err.(type) {
-				case ErrRangeException:
-					ensureError(t, err, "some error")
-					if got, avoid := err.Error(), "body"; strings.Contains(got, avoid) {
-						t.Errorf("GOT: %v; AVOID: %v", got, avoid)
-					}
-				default:
-					t.Errorf("GOT: %T; WANT: %T", err, ErrRangeException{})
-				}
-				ensureStringSlicesMatch(t, response, nil)
-			})
-		})
-
-		t.Run("RangeException carriage returns", func(t *testing.T) {
-			h := func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("RangeException", "some error")
-				w.Write([]byte("body1\r\nbody2\r\n"))
-			}
-			withClient(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				switch err.(type) {
-				case ErrRangeException:
-					ensureError(t, err, "some error")
-					if got, avoid := err.Error(), "body"; strings.Contains(got, avoid) {
-						t.Errorf("GOT: %v; AVOID: %v", got, avoid)
-					}
-				default:
-					t.Errorf("GOT: %T; WANT: %T", err, ErrRangeException{})
-				}
-				ensureStringSlicesMatch(t, response, nil)
-			})
-		})
-
-		t.Run("not ok", func(t *testing.T) {
-			e := http.StatusBadGateway
-			h := func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(e)
-				w.Write([]byte("body1\nbody2\n"))
-			}
-			withClient(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				switch v := err.(type) {
-				case ErrStatusNotOK:
-					ensureError(t, err, http.StatusText(e))
-					if got, avoid := err.Error(), "body"; strings.Contains(got, avoid) {
-						t.Errorf("GOT: %v; AVOID: %v", got, avoid)
-					}
-					ensureStringSlicesMatch(t, lines(v.Body), []string{"body1", "body2"})
-				default:
-					t.Errorf("GOT: %T; WANT: %T", err, ErrRangeException{})
-				}
-				ensureStringSlicesMatch(t, response, nil)
-			})
-		})
-
-		t.Run("not ok with carriage returns", func(t *testing.T) {
-			e := http.StatusBadGateway
-			h := func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(e)
-				w.Write([]byte("body1\r\nbody2\r\n"))
-			}
-			withClient(t, h, func(client *Client) {
-				response, err := client.Query("foo")
-				switch v := err.(type) {
-				case ErrStatusNotOK:
-					ensureError(t, err, http.StatusText(e))
-					if got, avoid := err.Error(), "body"; strings.Contains(got, avoid) {
-						t.Errorf("GOT: %v; AVOID: %v", got, avoid)
-					}
-					ensureStringSlicesMatch(t, lines(v.Body), []string{"body1", "body2"})
-				default:
-					t.Errorf("GOT: %T; WANT: %T", err, ErrRangeException{})
-				}
-				ensureStringSlicesMatch(t, response, nil)
 			})
 		})
 	})
@@ -298,7 +104,7 @@ func TestClient(t *testing.T) {
 					http.Error(w, r.Method, http.StatusMethodNotAllowed)
 				}
 			}
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				values, err := client.Query("foo")
 				if err != nil {
 					t.Fatal(err)
@@ -314,6 +120,7 @@ func TestClient(t *testing.T) {
 				t.Errorf("GOT: %v; WANT: %v", got, want)
 			}
 		})
+
 		t.Run("with GET when server returns method not allowed", func(t *testing.T) {
 			var getInvocationCount, putInvocationCount int
 
@@ -332,7 +139,7 @@ func TestClient(t *testing.T) {
 				}
 			}
 
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
 				for i := 0; i < defaultQueryURILengthThreshold; i++ {
@@ -354,6 +161,7 @@ func TestClient(t *testing.T) {
 				t.Errorf("GOT: %v; WANT: %v", got, want)
 			}
 		})
+
 		t.Run("will not try GET multiple times", func(t *testing.T) {
 			var getInvocationCount, putInvocationCount int
 
@@ -367,7 +175,7 @@ func TestClient(t *testing.T) {
 				http.Error(w, "body1\nbody2\n", http.StatusServiceUnavailable)
 			}
 
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				_, err := client.Query("%some.short.expression")
 				ensureError(t, err, http.StatusText(http.StatusServiceUnavailable))
 				switch e := err.(type) {
@@ -399,7 +207,7 @@ func TestClient(t *testing.T) {
 				http.Error(w, "body1\nbody2\n", http.StatusServiceUnavailable)
 			}
 
-			withClient(t, h, func(client *Client) {
+			withTestClient(t, h, func(client *Client) {
 				// Force initial use of PUT by creating very long query.
 				var expression strings.Builder
 				for i := 0; i < defaultQueryURILengthThreshold; i++ {
@@ -425,35 +233,42 @@ func TestClient(t *testing.T) {
 			}
 		})
 	})
-}
 
-const lineCount = 129
+	t.Run("sets user agent", func(t *testing.T) {
+		test := func(t *testing.T, set, want string) {
+			const message = "some error message\r\n"
 
-var largeResponse []byte
-
-func init() {
-	largeResponse = make([]byte, 1<<15) // 32 KiB
-	for i := 0; i < len(largeResponse); i++ {
-		largeResponse[i] = byte(i)
-	}
-}
-
-func BenchmarkLineSplitting(b *testing.B) {
-	h := func(w http.ResponseWriter, r *http.Request) {
-		w.Write(largeResponse)
-	}
-
-	b.Run("bufio scanner", func(b *testing.B) {
-		withClient(b, h, func(client *Client) {
-			for i := 0; i < b.N; i++ {
-				values, err := client.QueryCtx(context.Background(), "foo")
-				if err != nil {
-					b.Fatal(err)
+			h := func(w http.ResponseWriter, r *http.Request) {
+				if got := r.UserAgent(); !strings.HasPrefix(got, want) {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
-				if got, want := len(values), lineCount; got != want {
-					b.Fatalf("GOT: %v; WANT: %v", got, want)
+				if got := r.UserAgent(); !strings.HasSuffix(got, " via orange") {
+					t.Errorf("GOT: %v; SUFFIX: %v", got, " via orange")
 				}
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(message))
 			}
+
+			withTestServer(t, h, func(server *httptest.Server) {
+				client, err := NewClient(&Config{
+					HTTPClient: server.Client(),
+					RetryCount: 2,
+					Servers:    []string{strings.TrimLeft(server.URL, "http://")},
+					UserAgent:  set,
+				})
+				ensureError(t, err)
+
+				_, err = client.Query("{foo,bar}")
+				ensureError(t, err, "400")
+			})
+		}
+
+		t.Run("when user agent omitted", func(t *testing.T) {
+			test(t, "", "orange.test")
+		})
+
+		t.Run("when user agent set", func(t *testing.T) {
+			test(t, "Flubber/3.14", "Flubber/3.14")
 		})
 	})
 }

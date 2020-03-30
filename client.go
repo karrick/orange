@@ -3,13 +3,17 @@ package orange
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,40 +22,82 @@ import (
 // sent out via a PUT query.
 const defaultQueryURILengthThreshold = 4096
 
+const putContentType = "application/x-www-form-urlencoded"
+
+var application, userAgentSuffix string
+
+func init() {
+	var err error
+
+	application, err = os.Executable()
+	if err != nil {
+		application = os.Args[0]
+	}
+	application = filepath.Base(application)
+
+	account := os.Getenv("LOGNAME")
+	if account == "" {
+		account = "UNKNOWN"
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "UNKNOWN"
+	}
+
+	userAgentSuffix = fmt.Sprintf("%s@%s via orange", account, hostname)
+}
+
 // Client provides a Query method that resolves range queries.
 type Client struct {
-	// The only thing that prevents us from exposing a structure with all public
-	// fields is the fact that we need to create the round robin list of
-	// servers, and validate other config parameters.
+	stats         Stats // cannot be public; requires atomic access
+	userAgent     string
 	httpClient    Doer
-	servers       *roundRobinStrings
+	servers       *roundRobinStrings // must be initialized
 	retryCallback func(error) bool
 	retryCount    int
 	retryPause    time.Duration
 }
 
-// NewClient returns a new instance that sends queries to one or more range
-// servers.  The provided Config not only provides a way of listing one or more
-// range servers, but also allows specification of optional retry-on-failure
-// features.
+// NewClient attempts to create a new range client given the provided
+// configuration. The provided Config instance allows the client to specify a
+// list of range servers as the sources of truth, but also how to query them,
+// and retry handling.
 //
-//     func main() {
+//     package main
+//
+//     import (
+//         "bufio"
+//         "fmt"
+//         "os"
+//         "path/filepath"
+//
+//         "github.com/karrick/orange"
+//     )
+//
+//     var rangeClient *orange.Client
+//
+//     func init() {
+//         var err error
+//
 //         // Create a range client.  Programs can list more than one server and
 //         // include other options.  See Config structure documentation for specifics.
-//         client, err := orange.NewClient(&orange.Config{
-//             Servers: []string{"localhost:8081"},
+//         rangeClient, err = orange.NewClient(&orange.Config{
+//             Servers: []string{"range1", "range2"},
 //         })
 //         if err != nil {
-//             fmt.Fprintf(os.Stderr, "%s\n", err)
+//             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 //             os.Exit(1)
 //         }
+//     }
 //
+//     func main() {
 //         // Example program main loop reads query from standard input, queries the
 //         // range server, then prints the response.
 //         fmt.Printf("> ")
 //         scanner := bufio.NewScanner(os.Stdin)
 //         for scanner.Scan() {
-//             values, err := client.Query(scanner.Text())
+//             values, err := rangeClient.Query(scanner.Text())
 //             if err != nil {
 //                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 //                 fmt.Printf("> ")
@@ -64,6 +110,9 @@ type Client struct {
 //         }
 //     }
 func NewClient(config *Config) (*Client, error) {
+	if len(config.Servers) == 0 {
+		return nil, errors.New("cannot create range client without at least one server")
+	}
 	if config.RetryCount < 0 {
 		return nil, fmt.Errorf("cannot create Client with negative RetryCount: %d", config.RetryCount)
 	}
@@ -107,47 +156,35 @@ func NewClient(config *Config) (*Client, error) {
 		servers:       rrs,
 	}
 
+	if config.UserAgent == "" {
+		client.userAgent = fmt.Sprintf("%s %s", application, userAgentSuffix)
+	} else {
+		client.userAgent = fmt.Sprintf("%s %s", config.UserAgent, userAgentSuffix)
+	}
+
 	return client, nil
 }
 
 // Query sends out a query and returns either a slice of strings corresponding
 // to the query response or an error.
 //
-// The query is sent to one or more of the configured range servers.  If a
-// particular query results in an error, the query is retried according to the
-// client's RetryCount setting.
+// The query is sent to one or more of the configured range servers in
+// round-robin order.  If a range server returns a temporary network error or
+// network timeout error, if there are more than one range servers configured,
+// it retries the query with the next configured range server. The query is
+// retried according to the client's RetryCount setting.
 //
 // If a response includes a RangeException header, it returns ErrRangeException.
 // If a query's response HTTP status code is not okay, it returns
 // ErrStatusNotOK.
 //
 //     func main() {
-//         // Create a range client.  Programs can list more than one server and
-//         // include other options.  See Config structure documentation for specifics.
-//         client, err := orange.NewClient(&orange.Config{
-//             Servers: []string{"localhost:8081"},
-//         })
+//         values, err := rangeClient.Query("%foo.example.1")
 //         if err != nil {
 //             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 //             os.Exit(1)
 //         }
-//
-//         // Example program main loop reads query from standard input, queries the
-//         // range server, then prints the response.
-//         fmt.Printf("> ")
-//         scanner := bufio.NewScanner(os.Stdin)
-//         for scanner.Scan() {
-//             values, err := client.Query(scanner.Text())
-//             if err != nil {
-//                 fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//                 fmt.Printf("> ")
-//                 continue
-//             }
-//             fmt.Printf("%v\n> ", values)
-//         }
-//         if err := scanner.Err(); err != nil {
-//             fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-//         }
+//         fmt.Printf("%v\n> ", values)
 //     }
 func (c *Client) Query(expression string) ([]string, error) {
 	return c.QueryCtx(context.Background(), expression)
@@ -165,16 +202,6 @@ func (c *Client) Query(expression string) ([]string, error) {
 //         optTimeout := flag.Duration("timeout", 0, "timeout duration for the query")
 //         flag.Parse()
 //
-//         // Create a range client.  Programs can list more than one server and
-//         // include other options.  See Config structure documentation for specifics.
-//         client, err := orange.NewClient(&orange.Config{
-//             Servers: []string{"localhost:8081"},
-//         })
-//         if err != nil {
-//             fmt.Fprintf(os.Stderr, "%s\n", err)
-//             os.Exit(1)
-//         }
-//
 //         ctx := context.Background()
 //         if *optTimeout > 0 {
 //             var done func()
@@ -187,7 +214,13 @@ func (c *Client) Query(expression string) ([]string, error) {
 //             os.Exit(1)
 //         }
 //
-//         values, err := client.Query(strings.Join(flag.Args(), ","))
+//         rangeClient, err := orange.NewClient(&orange.Config{Servers:[]string{"range"}})
+//         if err != nil {
+//             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
+//             os.Exit(1)
+//         }
+//
+//         values, err := rangeClient.Query(strings.Join(flag.Args(), ","))
 //         if err != nil {
 //             fmt.Fprintf(os.Stderr, "%s: %s\n", filepath.Base(os.Args[0]), err)
 //             os.Exit(1)
@@ -196,14 +229,43 @@ func (c *Client) Query(expression string) ([]string, error) {
 //         fmt.Println(values)
 //     }
 func (c *Client) QueryCtx(ctx context.Context, expression string) (lines []string, err error) {
-	err = c.QueryCallback(ctx, expression, func(ior io.Reader) error {
-		s := bufio.NewScanner(ior)
-		for s.Scan() {
-			lines = append(lines, s.Text())
-		}
-		return s.Err()
+	err = c.QueryForEach(ctx, expression, func(value string) {
+		lines = append(lines, value)
 	})
 	return
+}
+
+// QueryForEach invokes callback for each result value, terminating early
+// without processing entire range server response when the provided context is
+// closed.
+func (c *Client) QueryForEach(ctx context.Context, expression string, callback func(value string)) error {
+	return c.QueryCallback(ctx, expression, func(ior io.Reader) error {
+		scanner := bufio.NewScanner(ior)
+		cDone := ctx.Done()
+		sDone := make(chan struct{})
+
+		go func() {
+		nextLine:
+			if scanner.Scan() {
+				select {
+				case _ = <-cDone:
+					// The context was closed while waiting for input line; do
+					// not invoke callback.
+				default:
+					callback(scanner.Text())
+					goto nextLine
+				}
+			}
+			close(sDone)
+		}()
+
+		select {
+		case _ = <-cDone:
+			return ctx.Err()
+		case _ = <-sDone:
+			return scanner.Err()
+		}
+	})
 }
 
 // QueryCallback sends the query expression to the range client with the
@@ -251,8 +313,19 @@ func (c *Client) QueryCallback(ctx context.Context, expression string, callback 
 	// caller.
 	select {
 	case <-done:
+		atomic.AddUint64(&c.stats.ErrContextDone, 1)
 		return ctx.Err()
 	case <-ch:
+		switch err.(type) {
+		case nil:
+			atomic.AddUint64(&c.stats.NoErr, 1)
+		case ErrRangeException:
+			atomic.AddUint64(&c.stats.ErrRangeException, 1)
+		case ErrStatusNotOK:
+			atomic.AddUint64(&c.stats.ErrStatusNotOK, 1)
+		default:
+			atomic.AddUint64(&c.stats.ErrUnknown, 1)
+		}
 		return err
 	}
 }
@@ -294,8 +367,8 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 
 			request, err = http.NewRequest(method, uri, nil)
 			if err != nil {
-				method = http.MethodPut // try again using PUT
 				prevErr = err
+				method = http.MethodPut // try again using PUT
 				continue
 			}
 		case http.MethodPut:
@@ -306,16 +379,17 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 
 			request, err = http.NewRequest(method, endpoint, strings.NewReader("query="+escaped))
 			if err != nil {
-				method = http.MethodGet // try again using GET
 				prevErr = err
+				method = http.MethodGet // try again using GET
 				continue
 			}
-			request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Content-Type", putContentType)
 		default:
 			panic(fmt.Errorf("this library should not have specified unsupported HTTP method: %q", method))
 		}
 
 		// Attach the context and dispatch the request.
+		request.Header.Set("User-Agent", c.userAgent)
 		response, err := c.httpClient.Do(request.WithContext(ctx))
 		if err != nil {
 			return err
@@ -325,7 +399,14 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 		// condition encoded in the response.
 		if response.StatusCode == http.StatusOK {
 			if message := response.Header.Get("RangeException"); message != "" {
-				return ErrRangeException{Message: message}
+				e := ErrRangeException{Message: message}
+
+				// Read response body and return its text in the error.
+				buf, err := bytesFromReadCloser(response.Body)
+				if l := len(buf); err == nil && l > 0 {
+					e.Body = buf
+				}
+				return e
 			}
 			//
 			// NORMAL EXIT PATH: range server provided non-error response
@@ -333,6 +414,7 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 			prevErr = callback(response.Body)
 			err = discard(response.Body)
 			if prevErr != nil {
+				// NOTE: Do not count callback error as ErrUnknown.
 				return prevErr
 			}
 			return err
@@ -377,16 +459,13 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 	}
 }
 
-func bytesFromReadCloser(iorc io.ReadCloser) ([]byte, error) {
-	buf, err1 := ioutil.ReadAll(iorc)
-	err2 := iorc.Close()
-	if err1 != nil {
-		return nil, err1
+func bytesFromReadCloser(rc io.ReadCloser) ([]byte, error) {
+	buf, rerr := ioutil.ReadAll(rc)
+	cerr := rc.Close() // always close regardless of read error
+	if rerr != nil {
+		return buf, rerr // Read error has more context than Close error
 	}
-	if err2 != nil {
-		return nil, err2
-	}
-	return buf, nil
+	return buf, cerr
 }
 
 func discard(iorc io.ReadCloser) error {
@@ -396,4 +475,24 @@ func discard(iorc io.ReadCloser) error {
 		return err1
 	}
 	return err2
+}
+
+// Stats returns a populated Stats structure and resets the counters.
+func (c *Client) Stats() Stats {
+	return Stats{
+		atomic.SwapUint64(&c.stats.NoErr, 0),
+		atomic.SwapUint64(&c.stats.ErrContextDone, 0),
+		atomic.SwapUint64(&c.stats.ErrRangeException, 0),
+		atomic.SwapUint64(&c.stats.ErrStatusNotOK, 0),
+		atomic.SwapUint64(&c.stats.ErrUnknown, 0),
+	}
+}
+
+// Stats tracks various statistics for the range client.
+type Stats struct {
+	NoErr             uint64
+	ErrContextDone    uint64
+	ErrRangeException uint64
+	ErrStatusNotOK    uint64
+	ErrUnknown        uint64
 }

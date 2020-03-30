@@ -46,6 +46,11 @@ type Config struct {
 	// Servers is slice of range server address strings.  Must contain at least
 	// one string.
 	Servers []string
+
+	// UserAgent specifies what user agent string to set in the outgoing HTTP
+	// request header. An empty user agent string causes the header to be set to
+	// the library name.
+	UserAgent string
 }
 
 // Doer performs the specfied http.Request and returns the http.Response.

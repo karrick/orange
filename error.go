@@ -8,6 +8,7 @@ import (
 // ErrRangeException is returned when the response includes an HTTP
 // 'RangeException' header.
 type ErrRangeException struct {
+	Body    []byte
 	Message string
 }
 

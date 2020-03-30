@@ -58,4 +58,25 @@ func TestRoundRobin(t *testing.T) {
 			t.Errorf("GOT: %v; WANT: %v", got, want)
 		}
 	})
+	t.Run("typical use", func(t *testing.T) {
+		rr, err := newRoundRobinStrings([]string{"first", "second"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var results []string
+		for i := rr.Len(); i > 0; i-- {
+			results = append(results, rr.Next())
+		}
+
+		if got, want := len(results), 2; got != want {
+			t.Errorf("GOT: %v; WANT: %v", got, want)
+		}
+		if got, want := results[0], "first"; got != want {
+			t.Errorf("GOT: %v; WANT: %v", got, want)
+		}
+		if got, want := results[1], "second"; got != want {
+			t.Errorf("GOT: %v; WANT: %v", got, want)
+		}
+	})
 }
