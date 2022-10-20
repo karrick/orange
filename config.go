@@ -46,6 +46,12 @@ type Config struct {
 	// Servers is slice of range server address strings.  Must contain at least
 	// one string.
 	Servers []string
+
+	// UserAgent is a string added to the HTTP headers and is intended to
+	// identify clients requesting online content.  When none is provided,
+	// the default Go user agent will be used.
+	// https://go.dev/src/net/http/request.go#L514
+	UserAgent string
 }
 
 // Doer performs the specfied http.Request and returns the http.Response.
