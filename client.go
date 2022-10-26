@@ -24,8 +24,8 @@ type Client struct {
 	// fields is the fact that we need to create the round robin list of
 	// servers, and validate other config parameters.
 	httpClient    Doer
-	servers       *roundRobinStrings
 	userAgent     string
+	servers       *roundRobinStrings
 	retryCallback func(error) bool
 	retryCount    int
 	retryPause    time.Duration
@@ -81,8 +81,6 @@ func NewClient(config *Config) (*Client, error) {
 		retryCallback = makeRetryCallback(len(config.Servers))
 	}
 
-	userAgent := config.UserAgent
-
 	httpClient := config.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{
@@ -108,7 +106,10 @@ func NewClient(config *Config) (*Client, error) {
 		retryCount:    config.RetryCount,
 		retryPause:    config.RetryPause,
 		servers:       rrs,
-		userAgent:     userAgent,
+	}
+
+	if config.UserAgent != "" {
+		client.userAgent = config.UserAgent
 	}
 
 	return client, nil
