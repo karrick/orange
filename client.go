@@ -25,6 +25,7 @@ type Client struct {
 	// servers, and validate other config parameters.
 	httpClient    Doer
 	servers       *roundRobinStrings
+	userAgent     string
 	retryCallback func(error) bool
 	retryCount    int
 	retryPause    time.Duration
@@ -80,6 +81,8 @@ func NewClient(config *Config) (*Client, error) {
 		retryCallback = makeRetryCallback(len(config.Servers))
 	}
 
+	userAgent := config.UserAgent
+
 	httpClient := config.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{
@@ -105,6 +108,7 @@ func NewClient(config *Config) (*Client, error) {
 		retryCount:    config.RetryCount,
 		retryPause:    config.RetryPause,
 		servers:       rrs,
+		userAgent:     userAgent,
 	}
 
 	return client, nil
@@ -313,6 +317,11 @@ func (c *Client) query(ctx context.Context, expression string, callback func(io.
 			request.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		default:
 			panic(fmt.Errorf("this library should not have specified unsupported HTTP method: %q", method))
+		}
+
+		// Set the user agent so servers have more information about their clients
+		if c.userAgent != "" {
+			request.Header.Set("User-Agent", c.userAgent)
 		}
 
 		// Attach the context and dispatch the request.

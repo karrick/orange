@@ -21,6 +21,7 @@ func withClient(tb testing.TB, h func(w http.ResponseWriter, r *http.Request), c
 			HTTPClient: server.Client(),
 			RetryCount: 2,
 			Servers:    []string{strings.TrimLeft(server.URL, "http://")},
+			UserAgent:  "custom-user-agent",
 		})
 		if err != nil {
 			tb.Fatal(err)
@@ -49,6 +50,9 @@ func TestClient(t *testing.T) {
 				if got, want := r.URL.RawQuery, "%7Bfoo%2Cbar%7D"; got != want {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
+				if got, want := r.Header.Get("User-Agent"), "custom-user-agent"; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
 			}
 			withClient(t, h, func(client *Client) {
 				_, err := client.Query("{foo,bar}")
@@ -68,6 +72,9 @@ func TestClient(t *testing.T) {
 
 			h := func(w http.ResponseWriter, r *http.Request) {
 				if got, want := r.URL.Path, "/range/list"; got != want {
+					t.Errorf("GOT: %v; WANT: %v", got, want)
+				}
+				if got, want := r.Header.Get("User-Agent"), "custom-user-agent"; got != want {
 					t.Errorf("GOT: %v; WANT: %v", got, want)
 				}
 				buf, err := bytesFromReadCloser(r.Body)
