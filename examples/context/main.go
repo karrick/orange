@@ -36,7 +36,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	values, err := client.Query(strings.Join(flag.Args(), ","))
+	values, err := client.QueryCtx(ctx, strings.Join(flag.Args(), ","))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
 		os.Exit(1)
